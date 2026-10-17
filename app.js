@@ -1,6 +1,6 @@
 /* Ficha de Ponto BERG – app offline. Formulário gerado do XLSForm (form.js). */
 "use strict";
-const APP_VERSION = "0.5.2";
+const APP_VERSION = "0.6.3";
 const F = window.FORM, CH = F.choices;
 const SEC_COLORS = {g_ident:"#201F1E",g_aflor:"#7A5A2E",g_macro:"#800000",g_miner:"#800000",g_testes:"#9A6B1E",g_estr:"#3F6B3F",g_alt:"#5C1F1F",g_interp:"#6E6659",g_obs:"#201F1E"};
 const META = new Set(["start","end","today"]);
@@ -92,15 +92,25 @@ function screenErrors(i){
 const visibleScreens=()=>{recompute();return SCREENS.map((s,i)=>i).filter(i=>REL[SCREENS[i].n]!==false);};
 
 /* ================= estado do app ================= */
-let RECS=[], SETTINGS={geologo:""}, view="home", screenIdx=0, showErr=false, dupFrom=null;
+let RECS=[], SETTINGS={geologo:""}, PROJS=[], PROJ=null, view="projects", screenIdx=0, showErr=false, dupFrom=null;
 const $=id=>document.getElementById(id);
 const app=$("app");
 function toast(m,ms=2400){const t=$("toast");t.textContent=m;t.hidden=false;clearTimeout(t._h);t._h=setTimeout(()=>t.hidden=true,ms);}
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 const nowIso=()=>new Date().toISOString();
 function fmt(iso){if(!iso)return "";const d=new Date(iso),p=n=>String(n).padStart(2,"0");return `${p(d.getDate())}/${p(d.getMonth()+1)} ${p(d.getHours())}:${p(d.getMinutes())}`;}
-const byCreated=()=>[...RECS].sort((a,b)=>b.created.localeCompare(a.created));
-const pendentes=()=>RECS.filter(r=>!r.exported);
+const SEM_PROJ="(sem projeto)";
+const projDe=r=>r.projeto||SEM_PROJ;
+const recsProj=()=>PROJ?RECS.filter(r=>projDe(r)===PROJ):RECS;
+const byCreated=()=>[...recsProj()].sort((a,b)=>b.created.localeCompare(a.created));
+const pendentes=()=>recsProj().filter(r=>!r.exported);
+function listaProjetos(){
+  const nomes=new Set(PROJS.map(p=>p.nome));for(const r of RECS)nomes.add(projDe(r));
+  return [...nomes].map(n=>{const rs=RECS.filter(r=>projDe(r)===n);const p=PROJS.find(x=>x.nome===n);
+    return{nome:n,total:rs.length,pend:rs.filter(r=>!r.exported).length,ult:rs.reduce((a,r)=>r.updated>a?r.updated:a,p?p.criado:"")};})
+    .sort((a,b)=>b.ult.localeCompare(a.ult));
+}
+const salvarProjs=()=>DB.set("projetos",PROJS);
 
 let saveTimer;
 function saveCur(){clearTimeout(saveTimer);saveTimer=setTimeout(()=>{if(!CUR)return;CUR.updated=nowIso();CUR.exported=false;DB.put(CUR).catch(e=>toast("Erro ao salvar: "+e.message));},300);}
@@ -117,7 +127,7 @@ async function novaFicha(duplicar){
   if(base){for(const[k,v]of Object.entries(base.values))if(!NAO_DUPLICAR.has(k))values[k]=JSON.parse(JSON.stringify(v));}
   if(SETTINGS.geologo)values.geologo=SETTINGS.geologo;
   values.ponto=sugerirCodigo();
-  CUR={id:uid(),created:nowIso(),updated:nowIso(),status:"rascunho",exported:false,values,medidas:[],croqui:null};
+  CUR={id:uid(),projeto:PROJ===SEM_PROJ?"":PROJ,created:nowIso(),updated:nowIso(),status:"rascunho",exported:false,values,medidas:[],croqui:null};
   RECS.push(CUR);await DB.put(CUR);
   dupFrom=base?base.values.ponto:null;
   openForm(0);
@@ -128,6 +138,7 @@ function goHome(){if(CUR){clearTimeout(saveTimer);CUR.updated=nowIso();DB.put(CU
 
 /* ================= telas ================= */
 function render(){
+  if(view==="projects")return renderProjects();
   if(view==="home")return renderHome();
   if(view==="form")return renderForm();
   if(view==="export")return renderExport();
@@ -135,21 +146,61 @@ function render(){
 }
 function el(html){const t=document.createElement("template");t.innerHTML=html.trim();return t.content.firstElementChild;}
 
-function renderHome(){
-  const pend=pendentes().length;
+function renderProjects(){
+  PROJ=null;
+  const projs=listaProjetos(),pendTot=RECS.filter(r=>!r.exported).length;
   app.innerHTML="";
   app.appendChild(el(`<div class="top"><div style="flex:1;min-width:0" class="sub">v${APP_VERSION} · ficha ${esc(F.version)}</div><button id="more">Mais</button></div>`));
   const m=el(`<div class="main"></div>`);app.appendChild(m);
   m.appendChild(el(`<div class="hero"><img src="icons/logo-header.png" alt="BERG Serviços Geológicos"><div class="t">Fichas de Ponto</div><div class="s">${SETTINGS.geologo?"Geólogo: "+esc(choiceLabel("geologos",SETTINGS.geologo)):"BERG Serviços Geológicos"}</div></div>`));
-  m.appendChild(el(`<button class="btn primary big" id="nova">+ Nova ficha</button>`));
-  const dup=el(`<button class="btn" id="dup">⧉ Duplicar ponto anterior${RECS.length?" ("+esc(byCreated()[0].values.ponto||"sem código")+")":""}</button>`);
-  dup.disabled=!RECS.length;m.appendChild(dup);
-  if(pend)m.appendChild(el(`<div class="banner warn"><span><b>${pend}</b> ficha${pend>1?"s":""} não exportada${pend>1?"s":""}</span><button class="btn" id="exp1">Exportar</button></div>`));
-  else if(RECS.length)m.appendChild(el(`<div class="banner ok">Todas as fichas foram exportadas.</div>`));
-  m.appendChild(el(`<h2>Fichas neste celular (${RECS.length})</h2>`));
+  m.appendChild(el(`<h2>Novo projeto</h2>`));
+  const f=el(`<form class="row" style="flex-wrap:nowrap"><input type="text" id="pnome" placeholder="Nome do projeto (ex.: Paramirim)" autocomplete="off" style="flex:1"><button class="btn primary" style="flex:0 0 auto">Criar</button></form>`);
+  m.appendChild(f);
+  f.onsubmit=async e=>{e.preventDefault();const n=$("pnome").value.trim();if(!n){toast("Digite o nome do projeto");return;}
+    if(listaProjetos().some(p=>p.nome.toLowerCase()===n.toLowerCase())){toast("Já existe um projeto com esse nome");return;}
+    PROJS.push({nome:n,criado:nowIso()});await salvarProjs();PROJ=n;view="home";render();window.scrollTo(0,0);};
+  if(pendTot)m.appendChild(el(`<div class="banner warn"><span><b>${pendTot}</b> ficha${pendTot>1?"s":""} não exportada${pendTot>1?"s":""} no total</span></div>`));
+  m.appendChild(el(`<h2>Projetos (${projs.length})</h2>`));
   const list=el(`<div class="list"></div>`);m.appendChild(list);
-  if(!RECS.length)list.appendChild(el(`<div class="muted">Nenhuma ficha ainda. Toque em “+ Nova ficha”.</div>`));
-  for(const r of [...RECS].sort((a,b)=>b.updated.localeCompare(a.updated))){
+  if(!projs.length)list.appendChild(el(`<div class="muted">Nenhum projeto ainda. Digite o nome acima e toque em “Criar”.</div>`));
+  for(const p of projs){
+    const chip=p.pend?`<span class="chip draft">${p.pend} não export.</span>`:(p.total?`<span class="chip exp">exportado</span>`:"");
+    const c=el(`<button class="card"><div><b>${esc(p.nome)}</b><div class="meta">${p.total} ficha${p.total===1?"":"s"}${p.ult?" · "+fmt(p.ult):""}</div></div>${chip}</button>`);
+    c.onclick=()=>{PROJ=p.nome;view="home";render();window.scrollTo(0,0);};list.appendChild(c);
+  }
+  $("more").onclick=()=>{view="more";render();};
+}
+
+async function renomearProjeto(){
+  const novo=(prompt("Novo nome do projeto:",PROJ)||"").trim();
+  if(!novo||novo===PROJ)return;
+  if(listaProjetos().some(p=>p.nome.toLowerCase()===novo.toLowerCase())){toast("Já existe um projeto com esse nome");return;}
+  for(const r of RECS)if(projDe(r)===PROJ){r.projeto=novo;await DB.put(r);}
+  const p=PROJS.find(x=>x.nome===PROJ);if(p)p.nome=novo;else PROJS.push({nome:novo,criado:nowIso()});
+  await salvarProjs();PROJ=novo;render();toast("Projeto renomeado");
+}
+async function excluirProjeto(){
+  if(recsProj().length){toast("Só é possível excluir projeto sem fichas");return;}
+  if(!confirm("Excluir o projeto "+PROJ+"?"))return;
+  PROJS=PROJS.filter(x=>x.nome!==PROJ);await salvarProjs();view="projects";render();toast("Projeto excluído");
+}
+
+function renderHome(){
+  const pend=pendentes().length;
+  app.innerHTML="";
+  const RS=recsProj();
+  app.appendChild(el(`<div class="top"><button id="back">‹ Projetos</button><h1>${esc(PROJ)}</h1><button id="pmenu" aria-label="Opções do projeto">⋮</button></div>`));
+  const m=el(`<div class="main"></div>`);app.appendChild(m);
+  const pm=el(`<div class="row" hidden><button class="btn" id="pren">Renomear projeto</button><button class="btn danger" id="pdel">Excluir projeto</button></div>`);m.appendChild(pm);
+  m.appendChild(el(`<button class="btn primary big" id="nova">+ Nova ficha</button>`));
+  const dup=el(`<button class="btn" id="dup">⧉ Duplicar ponto anterior${RS.length?" ("+esc(byCreated()[0].values.ponto||"sem código")+")":""}</button>`);
+  dup.disabled=!RS.length;m.appendChild(dup);
+  if(pend)m.appendChild(el(`<div class="banner warn"><span><b>${pend}</b> ficha${pend>1?"s":""} não exportada${pend>1?"s":""}</span><button class="btn" id="exp1">Exportar</button></div>`));
+  else if(RS.length)m.appendChild(el(`<div class="banner ok">Todas as fichas deste projeto foram exportadas.</div>`));
+  m.appendChild(el(`<h2>Fichas do projeto (${RS.length})</h2>`));
+  const list=el(`<div class="list"></div>`);m.appendChild(list);
+  if(!RS.length)list.appendChild(el(`<div class="muted">Nenhuma ficha ainda. Toque em “+ Nova ficha”.</div>`));
+  for(const r of [...RS].sort((a,b)=>b.updated.localeCompare(a.updated))){
     const v=r.values;
     const st=r.exported?`<span class="chip exp">exportada</span>`:(r.status==="final"?`<span class="chip final">finalizada</span>`:`<span class="chip draft">rascunho</span>`);
     const desc=[v.tipo_ponto?choiceLabel("tipo_ponto",v.tipo_ponto):"",v.litotipo||""].filter(Boolean).join(" · ");
@@ -157,9 +208,12 @@ function renderHome(){
     c.onclick=()=>openRec(r.id);list.appendChild(c);
   }
   $("nova").onclick=()=>novaFicha(false);dup.onclick=()=>novaFicha(true);
-  $("more").onclick=()=>{view="more";render();};
+  $("back").onclick=()=>{view="projects";render();window.scrollTo(0,0);};
+  $("pmenu").onclick=()=>{pm.hidden=!pm.hidden;};
+  $("pren").onclick=renomearProjeto;$("pdel").onclick=excluirProjeto;
+  if(PROJ===SEM_PROJ){$("pren").hidden=true;}
   if($("exp1"))$("exp1").onclick=()=>{view="export";render();};
-  app.appendChild(el(`<div class="bottom"><button class="btn primary" id="exp2">Exportar fichas</button></div>`));
+  app.appendChild(el(`<div class="bottom"><button class="btn primary" id="exp2">Exportar fichas do projeto</button></div>`));
   $("exp2").onclick=()=>{view="export";render();};
 }
 
@@ -168,7 +222,7 @@ function renderForm(){
   const vis=visibleScreens();if(!vis.includes(screenIdx))screenIdx=vis[0];
   const sc=SCREENS[screenIdx],pos=vis.indexOf(screenIdx),last=pos===vis.length-1;
   app.innerHTML="";
-  const top=el(`<div class="top"><button id="home">‹ Início</button><h1>${esc(CUR.values.ponto||"Nova ficha")}</h1><select id="jump" aria-label="Ir para seção"><option value="">☰ Seções</option>${vis.map(i=>`<option value="${i}">${esc(SCREENS[i].l)}</option>`).join("")}</select></div>`);
+  const top=el(`<div class="top"><button id="home">‹ Fichas</button><h1>${esc(CUR.values.ponto||"Nova ficha")}</h1><select id="jump" aria-label="Ir para seção"><option value="">☰ Seções</option>${vis.map(i=>`<option value="${i}">${esc(SCREENS[i].l)}</option>`).join("")}</select></div>`);
   app.appendChild(top);
   app.appendChild(el(`<div class="band" style="background:${SEC_COLORS[sc.n]||"#800000"}"><span>${esc(sc.l)}</span><small>${pos+1}/${vis.length}</small></div>`));
   app.appendChild(el(`<div class="progress"><i style="width:${(pos+1)/vis.length*100}%"></i></div>`));
@@ -302,13 +356,13 @@ function refresh(){
 function cell(leaf,v){if(isEmpty(v))return "";const list=listOf(leaf.t);if(list)return Array.isArray(v)?v.map(x=>choiceLabel(list,x)).join("; "):choiceLabel(list,v);return v;}
 function recordRows(rec){
   const prev=CUR;CUR=rec;recompute();
-  const row={ponto:rec.values.ponto||"",geologo:cell(BYNAME.geologo,rec.values.geologo),status:rec.status,criado:fmtIso(rec.created),atualizado:fmtIso(rec.updated)};
+  const row={projeto:rec.projeto||"",ponto:rec.values.ponto||"",geologo:cell(BYNAME.geologo,rec.values.geologo),status:rec.status,criado:fmtIso(rec.created),atualizado:fmtIso(rec.updated)};
   for(const c of EXCOLS){if(c==="ponto"||c==="geologo")continue;
     if(REL[c]===false){row[c]="";continue;}
     const leaf=BYNAME[c];
     row[c]=baseType(leaf.t)==="calculate"?CALC[c]:(c==="croqui"?(rec.croqui?safe(rec.values.ponto||rec.id)+".png":""):cell(leaf,rec.values[c]));
   }
-  const med=REL.medidas===false?[]:rec.medidas.map((m,i)=>({ponto:row.ponto,geologo:row.geologo,n:i+1,
+  const med=REL.medidas===false?[]:rec.medidas.map((m,i)=>({projeto:row.projeto,ponto:row.ponto,geologo:row.geologo,n:i+1,
     tipo_estrutura:cell(BYNAME.tipo_estrutura,m.tipo_estrutura),dir_merg:m.dir_merg??"",mergulho:m.mergulho??"",
     medida_clar:(m.dir_merg!=null&&m.dir_merg!==""?String(m.dir_merg).padStart(3,"0"):"")+"/"+(m.mergulho!=null&&m.mergulho!==""?String(m.mergulho).padStart(2,"0"):""),
     obs_estrutura:m.obs_estrutura||""}));
@@ -316,18 +370,18 @@ function recordRows(rec){
   return{row,med};
 }
 function fmtIso(iso){const d=new Date(iso),p=n=>String(n).padStart(2,"0");return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;}
-const safe=s=>String(s).replace(/[^\w\-]+/g,"_");
+const safe=s=>String(s).normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^\w\-]+/g,"_").replace(/_+/g,"_");
 function buildWorkbook(recs){
   const rows=[],meds=[];
-  for(const r of [...recs].sort((a,b)=>(a.values.ponto||"").localeCompare(b.values.ponto||"",undefined,{numeric:true}))){const x=recordRows(r);rows.push(x.row);meds.push(...x.med);}
+  for(const r of [...recs].sort((a,b)=>(a.projeto||"").localeCompare(b.projeto||"")||(a.values.ponto||"").localeCompare(b.values.ponto||"",undefined,{numeric:true}))){const x=recordRows(r);rows.push(x.row);meds.push(...x.med);}
   const wb=XLSX.utils.book_new();
-  const head=["ponto","geologo","status","criado","atualizado",...EXCOLS.filter(c=>c!=="ponto"&&c!=="geologo")];
-  const ws1=XLSX.utils.json_to_sheet(rows,{header:head});ws1["!cols"]=head.map(h=>({wch:Math.min(40,Math.max(10,h.length+2))}));ws1["!freeze"]={xSplit:1,ySplit:1};
+  const head=["projeto","ponto","geologo","status","criado","atualizado",...EXCOLS.filter(c=>c!=="ponto"&&c!=="geologo")];
+  const ws1=XLSX.utils.json_to_sheet(rows,{header:head});ws1["!cols"]=head.map(h=>({wch:Math.min(40,Math.max(10,h.length+2))}));ws1["!freeze"]={xSplit:2,ySplit:1};
   XLSX.utils.book_append_sheet(wb,ws1,"pontos");
-  const mh=["ponto","geologo","n","tipo_estrutura","dir_merg","mergulho","medida_clar","obs_estrutura"];
+  const mh=["projeto","ponto","geologo","n","tipo_estrutura","dir_merg","mergulho","medida_clar","obs_estrutura"];
   const ws2=XLSX.utils.json_to_sheet(meds,{header:mh});ws2["!cols"]=mh.map(()=>({wch:16}));
   XLSX.utils.book_append_sheet(wb,ws2,"medidas");
-  const dic=head.map(h=>({campo:h,pergunta:BYNAME[h]?(BYNAME[h].l||"(calculado)"):{status:"rascunho / final",criado:"data de criação",atualizado:"última alteração"}[h]||""}));
+  const dic=head.map(h=>({campo:h,pergunta:BYNAME[h]?(BYNAME[h].l||"(calculado)"):{projeto:"nome do projeto",status:"rascunho / final",criado:"data de criação",atualizado:"última alteração"}[h]||""}));
   const ws3=XLSX.utils.json_to_sheet(dic,{header:["campo","pergunta"]});ws3["!cols"]=[{wch:22},{wch:60}];
   XLSX.utils.book_append_sheet(wb,ws3,"dicionario");
   return XLSX.write(wb,{bookType:"xlsx",type:"array"});
@@ -350,29 +404,29 @@ async function shareOrDownload(blob,filename){
   setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},4000);return "download";
 }
 function renderExport(){
-  const pend=pendentes();
+  const pend=pendentes(),ALL=recsProj();
   app.innerHTML="";
-  app.appendChild(el(`<div class="top"><button id="home">‹ Início</button><h1>Exportar fichas</h1></div>`));
+  app.appendChild(el(`<div class="top"><button id="home">‹ Voltar</button><h1>Exportar – ${esc(PROJ||"todos os projetos")}</h1></div>`));
   const m=el(`<div class="main"></div>`);app.appendChild(m);
   m.appendChild(el(`<div class="muted">Gera um arquivo .zip com: planilha Excel (abas pontos, medidas e dicionário), croquis em PNG e um backup. Envie por WhatsApp, e-mail ou Drive.</div>`));
-  m.appendChild(el(`<div class="kv"><span>Não exportadas</span><b>${pend.length}</b><span>Total no celular</span><b>${RECS.length}</b><span>Rascunhos</span><b>${RECS.filter(r=>r.status!=="final").length}</b></div>`));
+  m.appendChild(el(`<div class="kv"><span>Não exportadas</span><b>${pend.length}</b><span>Total ${PROJ?"no projeto":"no celular"}</span><b>${ALL.length}</b><span>Rascunhos</span><b>${ALL.filter(r=>r.status!=="final").length}</b></div>`));
   const b1=el(`<button class="btn primary big">Exportar não exportadas (${pend.length})</button>`);b1.disabled=!pend.length;m.appendChild(b1);
-  const b2=el(`<button class="btn">Exportar todas (${RECS.length})</button>`);b2.disabled=!RECS.length;m.appendChild(b2);
+  const b2=el(`<button class="btn">Exportar todas (${ALL.length})</button>`);b2.disabled=!ALL.length;m.appendChild(b2);
   m.appendChild(el(`<div class="muted">Rascunhos também são exportados (coluna “status”). Depois de exportar, a ficha continua no celular até você excluí-la.</div>`));
   const go=async recs=>{
     try{
       toast("Gerando arquivo…");
       const geo=safe(choiceLabel("geologos",SETTINGS.geologo||"")||"equipe");
-      const nome=`BERG_fichas_${geo}_${stamp()}`;
+      const nome=`BERG_fichas_${safe(PROJ||"todos")}_${geo}_${stamp()}`;
       const blob=await buildZip(recs,nome);
       const r=await shareOrDownload(blob,nome+".zip");
       if(r==="cancel"){toast("Envio cancelado – fichas continuam como não exportadas");return;}
       const t=nowIso();for(const x of recs){x.exported=true;x.exportedAt=t;await DB.put(x);}
-      toast(r==="shared"?"Arquivo enviado":"Arquivo salvo em Downloads");view="home";render();
+      toast(r==="shared"?"Arquivo enviado":"Arquivo salvo em Downloads");view=PROJ?"home":"projects";render();
     }catch(e){console.error(e);toast("Erro na exportação: "+e.message,5000);}
   };
-  b1.onclick=()=>go(pend);b2.onclick=()=>go(RECS);
-  $("home").onclick=()=>{view="home";render();};
+  b1.onclick=()=>go(pend);b2.onclick=()=>go(ALL);
+  $("home").onclick=()=>{view=PROJ?"home":"more";render();};
 }
 
 /* ================= mais: consolidar, restaurar, sobre ================= */
@@ -391,8 +445,10 @@ async function readFiles(files){
 }
 function renderMore(){
   app.innerHTML="";
-  app.appendChild(el(`<div class="top"><button id="home">‹ Início</button><h1>Mais opções</h1></div>`));
+  app.appendChild(el(`<div class="top"><button id="home">‹ Projetos</button><h1>Mais opções</h1></div>`));
   const m=el(`<div class="main"></div>`);app.appendChild(m);
+  m.appendChild(el(`<h2>Exportar todos os projetos</h2>`));
+  const bx=el(`<button class="btn">Exportar fichas de todos os projetos</button>`);bx.onclick=()=>{PROJ=null;view="export";render();};m.appendChild(bx);
   m.appendChild(el(`<h2>Consolidar arquivos da equipe</h2>`));
   m.appendChild(el(`<div class="muted">No escritório (computador ou celular): selecione os .zip recebidos de cada geólogo. O app junta tudo numa planilha única, sem duplicar fichas.</div>`));
   const bc=el(`<button class="btn primary">Selecionar arquivos para consolidar</button>`);m.appendChild(bc);
@@ -408,7 +464,7 @@ function renderMore(){
   bc.onclick=()=>{fin.onchange=async()=>{
     const recs=await readFiles([...fin.files]);fin.value="";
     if(!recs.length){res.innerHTML="";res.appendChild(el(`<div class="banner warn">Nenhuma ficha encontrada nos arquivos.</div>`));return;}
-    const porGeo={};for(const r of recs){const g=choiceLabel("geologos",r.values.geologo||"")||"(sem geólogo)";porGeo[g]=(porGeo[g]||0)+1;}
+    const porGeo={};for(const r of recs){const g=projDe(r)+" – "+(choiceLabel("geologos",r.values.geologo||"")||"(sem geólogo)");porGeo[g]=(porGeo[g]||0)+1;}
     res.innerHTML="";
     res.appendChild(el(`<div class="banner info" style="flex-direction:column;align-items:flex-start"><b>${recs.length} fichas encontradas</b><span>${Object.entries(porGeo).map(([g,n])=>esc(g)+": "+n).join(" · ")}</span></div>`));
     const g=el(`<button class="btn primary big" style="margin-top:8px">Gerar planilha consolidada</button>`);res.appendChild(g);
@@ -417,7 +473,7 @@ function renderMore(){
   br.onclick=()=>{fin.onchange=async()=>{
     const recs=await readFiles([...fin.files]);fin.value="";
     let n=0;for(const r of recs){const o=RECS.find(x=>x.id===r.id);if(o&&o.updated>=r.updated)continue;await DB.put(r);n++;}
-    RECS=await DB.all();toast(n+" fichas restauradas");view="home";render();
+    RECS=await DB.all();toast(n+" fichas restauradas");view="projects";render();
   };fin.click();};
   inst.onclick=async()=>{if(!deferredInstall)return;deferredInstall.prompt();await deferredInstall.userChoice;deferredInstall=null;render();};
   (async()=>{
@@ -426,7 +482,7 @@ function renderMore(){
     try{if(navigator.storage&&navigator.storage.estimate){const e=await navigator.storage.estimate();uso=(e.usage/1048576).toFixed(1)+" MB";}}catch(e){}
     st.innerHTML=`<span>Versão do app</span><b>${APP_VERSION}</b><span>Versão da ficha</span><b>${esc(F.version)}</b><span>Armazenamento</span><b>${persist}</b><span>Espaço usado</span><b>${uso||"—"}</b><span>Modo</span><b>${navigator.onLine?"online":"offline"}</b>`;
   })();
-  $("home").onclick=()=>{view="home";render();};
+  $("home").onclick=()=>{view="projects";render();};
 }
 
 /* ================= início ================= */
@@ -434,6 +490,7 @@ function renderMore(){
   try{
     RECS=await DB.all();
     SETTINGS=Object.assign(SETTINGS,(await DB.get("settings"))||{});
+    PROJS=(await DB.get("projetos"))||[];
   }catch(e){app.innerHTML=`<div class="main"><div class="banner warn">Não foi possível abrir o armazenamento do celular (${esc(e.message)}). Saia do modo anônimo do navegador.</div></div>`;return;}
   try{if(navigator.storage&&navigator.storage.persist)await navigator.storage.persist();}catch(e){}
   render();
@@ -442,7 +499,7 @@ function renderMore(){
     const hadController=!!navigator.serviceWorker.controller;let reloaded=false;
     navigator.serviceWorker.addEventListener("controllerchange",()=>{
       if(reloaded||!hadController)return;
-      if(view==="home"){reloaded=true;location.reload();}
+      if(view==="home"||view==="projects"){reloaded=true;location.reload();}
       else{window.__reloadOnHome=true;toast("Nova versão instalada – será aplicada ao voltar ao início",4000);}
     });
   }
