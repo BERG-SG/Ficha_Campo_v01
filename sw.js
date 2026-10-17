@@ -1,5 +1,5 @@
 // Service worker: guarda o app inteiro no celular para funcionar sem internet.
-const CACHE = "berg-fichas-0.6.3-27a1170b";
+const CACHE = "berg-fichas-0.7.0-5ad55cdc";
 const ASSETS = ["./", "index.html", "app.js", "form.js", "manifest.webmanifest", "lib/xlsx.mini.min.js", "lib/jszip.min.js", "img/ex_1.jpg", "img/ex_2.jpg", "img/ex_3.jpg", "img/ex_4.jpg", "img/ref_dureza.jpg", "img/ref_granulometria.jpg", "img/ref_indice_cor.jpg", "img/ref_percentual.jpg", "icons/apple-touch-icon.png", "icons/icon-192.png", "icons/icon-512.png", "icons/logo-header.png", "icons/maskable-512.png"];
 
 self.addEventListener("install", (e) => {

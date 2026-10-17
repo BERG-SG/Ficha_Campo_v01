@@ -1,6 +1,6 @@
 /* Ficha de Ponto BERG – app offline. Formulário gerado do XLSForm (form.js). */
 "use strict";
-const APP_VERSION = "0.6.3";
+const APP_VERSION = "0.7.0";
 const F = window.FORM, CH = F.choices;
 const SEC_COLORS = {g_ident:"#201F1E",g_aflor:"#7A5A2E",g_macro:"#800000",g_miner:"#800000",g_testes:"#9A6B1E",g_estr:"#3F6B3F",g_alt:"#5C1F1F",g_interp:"#6E6659",g_obs:"#201F1E"};
 const META = new Set(["start","end","today"]);
@@ -147,7 +147,7 @@ function render(){
 function el(html){const t=document.createElement("template");t.innerHTML=html.trim();return t.content.firstElementChild;}
 
 function renderProjects(){
-  PROJ=null;
+  PROJ=null;SELMODE=false;SELSET.clear();
   const projs=listaProjetos(),pendTot=RECS.filter(r=>!r.exported).length;
   app.innerHTML="";
   app.appendChild(el(`<div class="top"><div style="flex:1;min-width:0" class="sub">v${APP_VERSION} · ficha ${esc(F.version)}</div><button id="more">Mais</button></div>`));
@@ -185,31 +185,77 @@ async function excluirProjeto(){
   PROJS=PROJS.filter(x=>x.nome!==PROJ);await salvarProjs();view="projects";render();toast("Projeto excluído");
 }
 
+let SELMODE=false; const SELSET=new Set();
+function sairSelecao(){SELMODE=false;SELSET.clear();render();}
+function cardStatus(r){return r.exported?`<span class="chip exp">exportada</span>`:(r.status==="final"?`<span class="chip final">finalizada</span>`:`<span class="chip draft">rascunho</span>`);}
+/* toque longo (~0,5 s) para entrar no modo de seleção */
+function longPress(node,onLong,onTap){
+  let t=null,fired=false,x0=0,y0=0;
+  node.addEventListener("pointerdown",e=>{fired=false;x0=e.clientX;y0=e.clientY;clearTimeout(t);
+    t=setTimeout(()=>{fired=true;if(navigator.vibrate)try{navigator.vibrate(30);}catch(_){};onLong();},500);});
+  const cancel=()=>clearTimeout(t);
+  node.addEventListener("pointermove",e=>{if(Math.abs(e.clientX-x0)>10||Math.abs(e.clientY-y0)>10)cancel();});
+  node.addEventListener("pointerup",cancel);node.addEventListener("pointerleave",cancel);node.addEventListener("pointercancel",cancel);
+  node.addEventListener("contextmenu",e=>e.preventDefault());
+  node.addEventListener("click",e=>{if(fired){e.preventDefault();fired=false;return;}onTap();});
+}
 function renderHome(){
   const pend=pendentes().length;
   app.innerHTML="";
   const RS=recsProj();
-  app.appendChild(el(`<div class="top"><button id="back">‹ Projetos</button><h1>${esc(PROJ)}</h1><button id="pmenu" aria-label="Opções do projeto">⋮</button></div>`));
+  for(const id of [...SELSET])if(!RS.some(r=>r.id===id))SELSET.delete(id);
+  const ordenadas=[...RS].sort((a,b)=>b.updated.localeCompare(a.updated));
+  if(SELMODE){
+    app.appendChild(el(`<div class="top"><button id="selx">✕ Cancelar</button><h1>${SELSET.size} selecionada${SELSET.size===1?"":"s"}</h1></div>`));
+  }else{
+    app.appendChild(el(`<div class="top"><button id="back">‹ Projetos</button><h1>${esc(PROJ)}</h1><button id="pmenu" aria-label="Opções do projeto">⋮</button></div>`));
+  }
   const m=el(`<div class="main"></div>`);app.appendChild(m);
-  const pm=el(`<div class="row" hidden><button class="btn" id="pren">Renomear projeto</button><button class="btn danger" id="pdel">Excluir projeto</button></div>`);m.appendChild(pm);
-  m.appendChild(el(`<button class="btn primary big" id="nova">+ Nova ficha</button>`));
-  const dup=el(`<button class="btn" id="dup">⧉ Duplicar ponto anterior${RS.length?" ("+esc(byCreated()[0].values.ponto||"sem código")+")":""}</button>`);
-  dup.disabled=!RS.length;m.appendChild(dup);
-  if(pend)m.appendChild(el(`<div class="banner warn"><span><b>${pend}</b> ficha${pend>1?"s":""} não exportada${pend>1?"s":""}</span><button class="btn" id="exp1">Exportar</button></div>`));
-  else if(RS.length)m.appendChild(el(`<div class="banner ok">Todas as fichas deste projeto foram exportadas.</div>`));
-  m.appendChild(el(`<h2>Fichas do projeto (${RS.length})</h2>`));
+  if(!SELMODE){
+    const pm=el(`<div class="row" id="pmrow" hidden><button class="btn" id="pren">Renomear projeto</button><button class="btn danger" id="pdel">Excluir projeto</button></div>`);m.appendChild(pm);
+    m.appendChild(el(`<button class="btn primary big" id="nova">+ Nova ficha</button>`));
+    const dup=el(`<button class="btn" id="dup">⧉ Duplicar ponto anterior${RS.length?" ("+esc(byCreated()[0].values.ponto||"sem código")+")":""}</button>`);
+    dup.disabled=!RS.length;m.appendChild(dup);
+    if(pend)m.appendChild(el(`<div class="banner warn"><span><b>${pend}</b> ficha${pend>1?"s":""} não exportada${pend>1?"s":""}</span><button class="btn" id="exp1">Exportar</button></div>`));
+    else if(RS.length)m.appendChild(el(`<div class="banner ok">Todas as fichas deste projeto foram exportadas.</div>`));
+    m.appendChild(el(`<h2>Fichas do projeto (${RS.length})</h2>`));
+    if(RS.length)m.appendChild(el(`<div class="muted" style="margin-top:-10px">Toque e segure uma ficha para selecionar e excluir várias.</div>`));
+  }else{
+    const all=RS.length&&SELSET.size===RS.length;
+    const sa=el(`<label class="opt selall${all?" on":""}"><input type="checkbox" id="selall"${all?" checked":""}><span><b>Selecionar todas as fichas do projeto</b> (${RS.length})</span></label>`);
+    m.appendChild(sa);
+    sa.querySelector("input").onchange=e=>{SELSET.clear();if(e.target.checked)RS.forEach(r=>SELSET.add(r.id));render();};
+  }
   const list=el(`<div class="list"></div>`);m.appendChild(list);
   if(!RS.length)list.appendChild(el(`<div class="muted">Nenhuma ficha ainda. Toque em “+ Nova ficha”.</div>`));
-  for(const r of [...RS].sort((a,b)=>b.updated.localeCompare(a.updated))){
-    const v=r.values;
-    const st=r.exported?`<span class="chip exp">exportada</span>`:(r.status==="final"?`<span class="chip final">finalizada</span>`:`<span class="chip draft">rascunho</span>`);
+  for(const r of ordenadas){
+    const v=r.values,on=SELSET.has(r.id);
     const desc=[v.tipo_ponto?choiceLabel("tipo_ponto",v.tipo_ponto):"",v.litotipo||""].filter(Boolean).join(" · ");
-    const c=el(`<button class="card"><div><b>${esc(v.ponto||"(sem código)")}</b><div class="meta">${esc(desc)} · ${fmt(r.updated)}</div></div>${st}</button>`);
-    c.onclick=()=>openRec(r.id);list.appendChild(c);
+    const right=SELMODE?`<span class="selr">${cardStatus(r)}<span class="selbox${on?" on":""}" aria-hidden="true">${on?"✓":""}</span></span>`:cardStatus(r);
+    const c=el(`<button class="card${SELMODE&&on?" sel":""}" aria-pressed="${SELMODE?on:false}"><div><b>${esc(v.ponto||"(sem código)")}</b><div class="meta">${esc(desc)} · ${fmt(r.updated)}</div></div>${right}</button>`);
+    const toggle=()=>{if(SELSET.has(r.id))SELSET.delete(r.id);else SELSET.add(r.id);render();};
+    longPress(c,()=>{if(!SELMODE){SELMODE=true;SELSET.clear();}SELSET.add(r.id);render();},()=>{if(SELMODE)toggle();else openRec(r.id);});
+    list.appendChild(c);
   }
-  $("nova").onclick=()=>novaFicha(false);dup.onclick=()=>novaFicha(true);
+  if(SELMODE){
+    app.appendChild(el(`<div class="bottom"><button class="btn" id="selcancel">Cancelar</button><button class="btn primary delbtn" id="seldel"${SELSET.size?"":" disabled"}>Excluir (${SELSET.size})</button></div>`));
+    $("selx").onclick=sairSelecao;$("selcancel").onclick=sairSelecao;
+    $("seldel").onclick=async()=>{
+      const sel=RS.filter(r=>SELSET.has(r.id));if(!sel.length)return;
+      const naoExp=sel.filter(r=>!r.exported).length;
+      let msg=`Excluir ${sel.length} ficha${sel.length>1?"s":""} do projeto ${PROJ}? Isso não pode ser desfeito.`;
+      if(naoExp)msg+=`\n\nATENÇÃO: ${naoExp} dessas fichas ainda NÃO foram exportadas e serão perdidas.`;
+      if(!confirm(msg))return;
+      for(const r of sel)await DB.del(r.id);
+      RECS=RECS.filter(r=>!SELSET.has(r.id));
+      toast(`${sel.length} ficha${sel.length>1?"s":""} excluída${sel.length>1?"s":""}`);
+      sairSelecao();
+    };
+    return;
+  }
+  $("nova").onclick=()=>novaFicha(false);$("dup").onclick=()=>novaFicha(true);
   $("back").onclick=()=>{view="projects";render();window.scrollTo(0,0);};
-  $("pmenu").onclick=()=>{pm.hidden=!pm.hidden;};
+  $("pmenu").onclick=()=>{$("pmrow").hidden=!$("pmrow").hidden;};
   $("pren").onclick=renomearProjeto;$("pdel").onclick=excluirProjeto;
   if(PROJ===SEM_PROJ){$("pren").hidden=true;}
   if($("exp1"))$("exp1").onclick=()=>{view="export";render();};
