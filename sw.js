@@ -1,6 +1,6 @@
 // Service worker: guarda o app inteiro no celular para funcionar sem internet.
-const CACHE = "berg-fichas-0.5.0-f4456676";
-const ASSETS = ["./", "index.html", "app.js", "form.js", "manifest.webmanifest", "lib/xlsx.mini.min.js", "lib/jszip.min.js", "img/ex_1.jpg", "img/ex_2.jpg", "img/ex_3.jpg", "img/ex_4.jpg", "img/ref_dureza.jpg", "img/ref_granulometria.jpg", "img/ref_indice_cor.jpg", "img/ref_percentual.jpg", "icons/apple-touch-icon.png", "icons/icon-192.png", "icons/icon-512.png", "icons/maskable-512.png"];
+const CACHE = "berg-fichas-0.5.2-7fb926d7";
+const ASSETS = ["./", "index.html", "app.js", "form.js", "manifest.webmanifest", "lib/xlsx.mini.min.js", "lib/jszip.min.js", "img/ex_1.jpg", "img/ex_2.jpg", "img/ex_3.jpg", "img/ex_4.jpg", "img/ref_dureza.jpg", "img/ref_granulometria.jpg", "img/ref_indice_cor.jpg", "img/ref_percentual.jpg", "icons/apple-touch-icon.png", "icons/icon-192.png", "icons/icon-512.png", "icons/logo-header.png", "icons/maskable-512.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));

@@ -1,8 +1,8 @@
 /* Ficha de Ponto BERG – app offline. Formulário gerado do XLSForm (form.js). */
 "use strict";
-const APP_VERSION = "0.5.0";
+const APP_VERSION = "0.5.2";
 const F = window.FORM, CH = F.choices;
-const SEC_COLORS = {g_ident:"#1F4E5A",g_aflor:"#7A4E2D",g_macro:"#1F5F6E",g_miner:"#1F5F6E",g_testes:"#5B3F8C",g_estr:"#2F5597",g_alt:"#8B2252",g_interp:"#B4561B",g_obs:"#404040"};
+const SEC_COLORS = {g_ident:"#201F1E",g_aflor:"#7A5A2E",g_macro:"#800000",g_miner:"#800000",g_testes:"#9A6B1E",g_estr:"#3F6B3F",g_alt:"#5C1F1F",g_interp:"#6E6659",g_obs:"#201F1E"};
 const META = new Set(["start","end","today"]);
 const NAO_DUPLICAR = new Set(["ponto","amostra","observacoes","croqui"]);
 
@@ -138,8 +138,9 @@ function el(html){const t=document.createElement("template");t.innerHTML=html.tr
 function renderHome(){
   const pend=pendentes().length;
   app.innerHTML="";
-  app.appendChild(el(`<div class="top"><div style="flex:1;min-width:0"><h1>Fichas de Ponto BERG</h1><div class="sub">v${APP_VERSION} · ficha ${esc(F.version)}${SETTINGS.geologo?" · "+esc(choiceLabel("geologos",SETTINGS.geologo)):""}</div></div><button id="more">Mais</button></div>`));
+  app.appendChild(el(`<div class="top"><div style="flex:1;min-width:0" class="sub">v${APP_VERSION} · ficha ${esc(F.version)}</div><button id="more">Mais</button></div>`));
   const m=el(`<div class="main"></div>`);app.appendChild(m);
+  m.appendChild(el(`<div class="hero"><img src="icons/logo-header.png" alt="BERG Serviços Geológicos"><div class="t">Fichas de Ponto</div><div class="s">${SETTINGS.geologo?"Geólogo: "+esc(choiceLabel("geologos",SETTINGS.geologo)):"BERG Serviços Geológicos"}</div></div>`));
   m.appendChild(el(`<button class="btn primary big" id="nova">+ Nova ficha</button>`));
   const dup=el(`<button class="btn" id="dup">⧉ Duplicar ponto anterior${RECS.length?" ("+esc(byCreated()[0].values.ponto||"sem código")+")":""}</button>`);
   dup.disabled=!RECS.length;m.appendChild(dup);
@@ -169,7 +170,7 @@ function renderForm(){
   app.innerHTML="";
   const top=el(`<div class="top"><button id="home">‹ Início</button><h1>${esc(CUR.values.ponto||"Nova ficha")}</h1><select id="jump" aria-label="Ir para seção"><option value="">☰ Seções</option>${vis.map(i=>`<option value="${i}">${esc(SCREENS[i].l)}</option>`).join("")}</select></div>`);
   app.appendChild(top);
-  app.appendChild(el(`<div class="band" style="background:${SEC_COLORS[sc.n]||"#1F5F6E"}"><span>${esc(sc.l)}</span><small>${pos+1}/${vis.length}</small></div>`));
+  app.appendChild(el(`<div class="band" style="background:${SEC_COLORS[sc.n]||"#800000"}"><span>${esc(sc.l)}</span><small>${pos+1}/${vis.length}</small></div>`));
   app.appendChild(el(`<div class="progress"><i style="width:${(pos+1)/vis.length*100}%"></i></div>`));
   const m=el(`<div class="main" id="body"></div>`);app.appendChild(m);
   if(dupFrom&&screenIdx===vis[0])m.appendChild(el(`<div class="banner info">Campos copiados de <b>${esc(dupFrom)}</b>. Revise tudo antes de finalizar.</div>`));
