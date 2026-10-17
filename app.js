@@ -1,0 +1,448 @@
+/* Ficha de Ponto BERG – app offline. Formulário gerado do XLSForm (form.js). */
+"use strict";
+const APP_VERSION = "0.5.0";
+const F = window.FORM, CH = F.choices;
+const SEC_COLORS = {g_ident:"#1F4E5A",g_aflor:"#7A4E2D",g_macro:"#1F5F6E",g_miner:"#1F5F6E",g_testes:"#5B3F8C",g_estr:"#2F5597",g_alt:"#8B2252",g_interp:"#B4561B",g_obs:"#404040"};
+const META = new Set(["start","end","today"]);
+const NAO_DUPLICAR = new Set(["ponto","amostra","observacoes","croqui"]);
+
+/* ================= árvore do formulário ================= */
+function buildTree(rows){
+  const root={kind:"root",children:[]},st=[root];
+  for(const r of rows){
+    if(r.t==="begin_group"||r.t==="begin_repeat"){const n={...r,kind:r.t==="begin_group"?"group":"repeat",children:[]};st[st.length-1].children.push(n);st.push(n);}
+    else if(r.t==="end_group"||r.t==="end_repeat")st.pop();
+    else st[st.length-1].children.push({...r,kind:"leaf"});
+  }
+  return root;
+}
+const TREE=buildTree(F.rows);
+const SCREENS=TREE.children.filter(n=>n.kind==="group");
+const REPEAT=(function f(n){for(const c of n.children||[]){if(c.kind==="repeat")return c;const x=f(c);if(x)return x;}})(TREE);
+const REP_LEAVES=[];(function f(n){for(const c of n.children){if(c.kind==="leaf")REP_LEAVES.push(c);else f(c);}})(REPEAT);
+const REP_NAMES=new Set(REP_LEAVES.map(l=>l.n));
+const LEAVES=[];(function f(n){for(const c of n.children){if(c.kind==="leaf")LEAVES.push(c);else if(c.kind==="group")f(c);}})(TREE);
+const BYNAME=Object.fromEntries(F.rows.map(r=>[r.n,r]));
+const listOf=t=>t.split(" ")[1]||null, baseType=t=>t.split(" ")[0];
+const EXCOLS=LEAVES.filter(l=>{const t=baseType(l.t);return !META.has(t)&&t!=="note"&&listOf(l.t)!=="ver";}).map(l=>l.n);
+
+/* ================= banco local (IndexedDB) ================= */
+const DB=(()=>{
+  let dbp;
+  const open=()=>dbp||(dbp=new Promise((res,rej)=>{const r=indexedDB.open("berg-fichas",1);
+    r.onupgradeneeded=()=>{const d=r.result;d.createObjectStore("fichas",{keyPath:"id"});d.createObjectStore("kv");};
+    r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);}));
+  const run=(store,mode,fn)=>open().then(d=>new Promise((res,rej)=>{const t=d.transaction(store,mode);const req=fn(t.objectStore(store));
+    t.oncomplete=()=>res(req&&"result"in req?req.result:undefined);t.onerror=()=>rej(t.error);t.onabort=()=>rej(t.error);}));
+  return{all:()=>run("fichas","readonly",s=>s.getAll()),put:r=>run("fichas","readwrite",s=>s.put(r)),
+    del:id=>run("fichas","readwrite",s=>s.delete(id)),get:k=>run("kv","readonly",s=>s.get(k)),set:(k,v)=>run("kv","readwrite",s=>s.put(v,k))};
+})();
+
+/* ================= motor de lógica ================= */
+let CUR=null, REL={}, CALC={};
+const SEL=(v,o)=>Array.isArray(v)&&v.includes(o), CNT=v=>Array.isArray(v)?v.length:0;
+const fnCache={};
+function ev(js,ctx,cur){
+  if(!js)return true;
+  const f=fnCache[js]||(fnCache[js]=new Function("V","SEL","CNT","CUR","return ("+js+");"));
+  const V=n=>{
+    if(ctx&&REP_NAMES.has(n)){const v=ctx[n];return v==null?"":v;}
+    if(n in CALC)return CALC[n];
+    if(REL[n]===false)return "";
+    const v=CUR.values[n];return v==null?"":v;
+  };
+  try{return f(V,SEL,CNT,cur);}catch(e){console.warn(js,e);return true;}
+}
+const choiceLabel=(list,v)=>{const o=(CH[list]||[]).find(c=>c[0]===String(v));return o?o[1]:v;};
+function recompute(){
+  REL={};CALC={};
+  (function walk(n,pr){for(const c of n.children){
+    if(c.kind==="repeat"){REL[c.n]=pr&&ev(c.rel);continue;}
+    const r=pr&&ev(c.rel);REL[c.n]=r;
+    if(c.kind==="group")walk(c,r);else if(baseType(c.t)==="calculate")CALC[c.n]=r?calc(c.n):"";
+  }})(TREE,true);
+}
+function corNome(n){const v=CUR.values["cor_solo_"+n];if(!v||REL["cor_solo_"+n]===false)return "";return v==="outra"?(CUR.values["cor_solo_"+n+"_outra"]||""):choiceLabel("cores_solo",v);}
+function calc(name,ctx){
+  if(name==="cor_solo_desc"){const p=[1,2,3].map(corNome);return p[0]?p[0]+(p[1]?" + "+p[1]:"")+(p[2]?" + "+p[2]:""):"";}
+  if(name==="pct_total"){let s=0;for(const l of LEAVES)if(l.n.startsWith("pct_")&&REL[l.n]!==false){const v=Number(CUR.values[l.n]);if(CUR.values[l.n]!==""&&!isNaN(v))s+=v;}return s;}
+  if(name==="medida_txt"&&ctx){if(!ctx.tipo_estrutura)return "";return choiceLabel("tipo_estrutura",ctx.tipo_estrutura)+" "+(ctx.dir_merg??"")+"/"+(ctx.mergulho??"");}
+  return "";
+}
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const interp=(s,ctx)=>s.replace(/\$\{(\w+)\}/g,(m,n)=>{const v=(n in CALC)?CALC[n]:(ctx&&REP_NAMES.has(n)?ctx[n]:CUR.values[n]);return v==null?"":esc(v);}).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>");
+const isEmpty=v=>v==null||v===""||(Array.isArray(v)&&!v.length);
+function errorsFor(leaf,ctx){
+  const t=baseType(leaf.t);if(["note","calculate"].includes(t)||META.has(t))return null;
+  const v=ctx?ctx[leaf.n]:CUR.values[leaf.n];
+  if(leaf.req&&ev(leaf.req,ctx)&&isEmpty(v))return leaf.reqm||"Resposta obrigatória.";
+  if(!isEmpty(v)&&leaf.con&&!ev(leaf.con,ctx,t==="integer"?Number(v):v))return leaf.conm||"Valor inválido.";
+  return null;
+}
+function screenErrors(i){
+  const errs=[];
+  (function walk(n){for(const c of n.children){
+    if(REL[c.n]===false)continue;
+    if(c.kind==="group")walk(c);
+    else if(c.kind==="repeat")CUR.medidas.forEach((m,k)=>{for(const l of REP_LEAVES){if(!ev(l.rel,m))continue;const e=errorsFor(l,m);if(e)errs.push({n:l.n,k,e});}});
+    else{const e=errorsFor(c);if(e)errs.push({n:c.n,e});}
+  }})(SCREENS[i]);
+  return errs;
+}
+const visibleScreens=()=>{recompute();return SCREENS.map((s,i)=>i).filter(i=>REL[SCREENS[i].n]!==false);};
+
+/* ================= estado do app ================= */
+let RECS=[], SETTINGS={geologo:""}, view="home", screenIdx=0, showErr=false, dupFrom=null;
+const $=id=>document.getElementById(id);
+const app=$("app");
+function toast(m,ms=2400){const t=$("toast");t.textContent=m;t.hidden=false;clearTimeout(t._h);t._h=setTimeout(()=>t.hidden=true,ms);}
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+const nowIso=()=>new Date().toISOString();
+function fmt(iso){if(!iso)return "";const d=new Date(iso),p=n=>String(n).padStart(2,"0");return `${p(d.getDate())}/${p(d.getMonth()+1)} ${p(d.getHours())}:${p(d.getMinutes())}`;}
+const byCreated=()=>[...RECS].sort((a,b)=>b.created.localeCompare(a.created));
+const pendentes=()=>RECS.filter(r=>!r.exported);
+
+let saveTimer;
+function saveCur(){clearTimeout(saveTimer);saveTimer=setTimeout(()=>{if(!CUR)return;CUR.updated=nowIso();CUR.exported=false;DB.put(CUR).catch(e=>toast("Erro ao salvar: "+e.message));},300);}
+function onChange(){saveCur();clearTimeout(onChange._t);onChange._t=setTimeout(refresh,50);}
+
+function sugerirCodigo(){
+  const last=byCreated()[0];if(!last||!last.values.ponto)return "";
+  const m=String(last.values.ponto).match(/^(.*?)(\d+)(\D*)$/);if(!m)return "";
+  const n=String(Number(m[2])+1).padStart(m[2].length,"0");return m[1]+n+m[3];
+}
+async function novaFicha(duplicar){
+  const base=duplicar?byCreated()[0]:null;
+  const values={};
+  if(base){for(const[k,v]of Object.entries(base.values))if(!NAO_DUPLICAR.has(k))values[k]=JSON.parse(JSON.stringify(v));}
+  if(SETTINGS.geologo)values.geologo=SETTINGS.geologo;
+  values.ponto=sugerirCodigo();
+  CUR={id:uid(),created:nowIso(),updated:nowIso(),status:"rascunho",exported:false,values,medidas:[],croqui:null};
+  RECS.push(CUR);await DB.put(CUR);
+  dupFrom=base?base.values.ponto:null;
+  openForm(0);
+}
+function openRec(id){CUR=RECS.find(r=>r.id===id);dupFrom=null;openForm(0);}
+function openForm(i){view="form";screenIdx=i;showErr=false;render();window.scrollTo(0,0);}
+function goHome(){if(CUR){clearTimeout(saveTimer);CUR.updated=nowIso();DB.put(CUR);}CUR=null;view="home";if(window.__reloadOnHome){setTimeout(()=>location.reload(),300);return;}render();window.scrollTo(0,0);}
+
+/* ================= telas ================= */
+function render(){
+  if(view==="home")return renderHome();
+  if(view==="form")return renderForm();
+  if(view==="export")return renderExport();
+  if(view==="more")return renderMore();
+}
+function el(html){const t=document.createElement("template");t.innerHTML=html.trim();return t.content.firstElementChild;}
+
+function renderHome(){
+  const pend=pendentes().length;
+  app.innerHTML="";
+  app.appendChild(el(`<div class="top"><div style="flex:1;min-width:0"><h1>Fichas de Ponto BERG</h1><div class="sub">v${APP_VERSION} · ficha ${esc(F.version)}${SETTINGS.geologo?" · "+esc(choiceLabel("geologos",SETTINGS.geologo)):""}</div></div><button id="more">Mais</button></div>`));
+  const m=el(`<div class="main"></div>`);app.appendChild(m);
+  m.appendChild(el(`<button class="btn primary big" id="nova">+ Nova ficha</button>`));
+  const dup=el(`<button class="btn" id="dup">⧉ Duplicar ponto anterior${RECS.length?" ("+esc(byCreated()[0].values.ponto||"sem código")+")":""}</button>`);
+  dup.disabled=!RECS.length;m.appendChild(dup);
+  if(pend)m.appendChild(el(`<div class="banner warn"><span><b>${pend}</b> ficha${pend>1?"s":""} não exportada${pend>1?"s":""}</span><button class="btn" id="exp1">Exportar</button></div>`));
+  else if(RECS.length)m.appendChild(el(`<div class="banner ok">Todas as fichas foram exportadas.</div>`));
+  m.appendChild(el(`<h2>Fichas neste celular (${RECS.length})</h2>`));
+  const list=el(`<div class="list"></div>`);m.appendChild(list);
+  if(!RECS.length)list.appendChild(el(`<div class="muted">Nenhuma ficha ainda. Toque em “+ Nova ficha”.</div>`));
+  for(const r of [...RECS].sort((a,b)=>b.updated.localeCompare(a.updated))){
+    const v=r.values;
+    const st=r.exported?`<span class="chip exp">exportada</span>`:(r.status==="final"?`<span class="chip final">finalizada</span>`:`<span class="chip draft">rascunho</span>`);
+    const desc=[v.tipo_ponto?choiceLabel("tipo_ponto",v.tipo_ponto):"",v.litotipo||""].filter(Boolean).join(" · ");
+    const c=el(`<button class="card"><div><b>${esc(v.ponto||"(sem código)")}</b><div class="meta">${esc(desc)} · ${fmt(r.updated)}</div></div>${st}</button>`);
+    c.onclick=()=>openRec(r.id);list.appendChild(c);
+  }
+  $("nova").onclick=()=>novaFicha(false);dup.onclick=()=>novaFicha(true);
+  $("more").onclick=()=>{view="more";render();};
+  if($("exp1"))$("exp1").onclick=()=>{view="export";render();};
+  app.appendChild(el(`<div class="bottom"><button class="btn primary" id="exp2">Exportar fichas</button></div>`));
+  $("exp2").onclick=()=>{view="export";render();};
+}
+
+function renderForm(){
+  recompute();
+  const vis=visibleScreens();if(!vis.includes(screenIdx))screenIdx=vis[0];
+  const sc=SCREENS[screenIdx],pos=vis.indexOf(screenIdx),last=pos===vis.length-1;
+  app.innerHTML="";
+  const top=el(`<div class="top"><button id="home">‹ Início</button><h1>${esc(CUR.values.ponto||"Nova ficha")}</h1><select id="jump" aria-label="Ir para seção"><option value="">☰ Seções</option>${vis.map(i=>`<option value="${i}">${esc(SCREENS[i].l)}</option>`).join("")}</select></div>`);
+  app.appendChild(top);
+  app.appendChild(el(`<div class="band" style="background:${SEC_COLORS[sc.n]||"#1F5F6E"}"><span>${esc(sc.l)}</span><small>${pos+1}/${vis.length}</small></div>`));
+  app.appendChild(el(`<div class="progress"><i style="width:${(pos+1)/vis.length*100}%"></i></div>`));
+  const m=el(`<div class="main" id="body"></div>`);app.appendChild(m);
+  if(dupFrom&&screenIdx===vis[0])m.appendChild(el(`<div class="banner info">Campos copiados de <b>${esc(dupFrom)}</b>. Revise tudo antes de finalizar.</div>`));
+  const errs=showErr?screenErrors(screenIdx):[];
+  renderChildren(sc,m,null,errs);
+  if(last){
+    const z=el(`<div class="row" style="margin-top:12px"><button class="btn danger" id="del">Excluir esta ficha</button></div>`);m.appendChild(z);
+    $("del").onclick=async()=>{if(!confirm("Excluir a ficha "+(CUR.values.ponto||"")+"? Isso não pode ser desfeito."))return;await DB.del(CUR.id);RECS=RECS.filter(r=>r.id!==CUR.id);CUR=null;view="home";render();toast("Ficha excluída");};
+  }
+  app.appendChild(el(`<div class="bottom"><button class="btn" id="prev"${pos===0?" disabled":""}>‹ Anterior</button><button class="btn primary" id="next">${last?"Finalizar ✓":"Próxima ›"}</button></div>`));
+  $("home").onclick=goHome;
+  $("jump").onchange=e=>{if(e.target.value!==""){screenIdx=+e.target.value;showErr=false;render();window.scrollTo(0,0);}};
+  $("prev").onclick=()=>{if(pos>0){screenIdx=vis[pos-1];showErr=false;render();window.scrollTo(0,0);}};
+  $("next").onclick=()=>{
+    recompute();
+    if(screenErrors(screenIdx).length){showErr=true;render();const e=document.querySelector(".err");if(e)e.scrollIntoView({block:"center"});toast("Corrija os campos marcados");return;}
+    showErr=false;
+    if(!last){screenIdx=vis[pos+1];render();window.scrollTo(0,0);return;}
+    for(const i of visibleScreens())if(screenErrors(i).length){screenIdx=i;showErr=true;render();toast("Há campos obrigatórios pendentes");return;}
+    CUR.status="final";CUR.updated=nowIso();CUR.exported=false;DB.put(CUR);
+    toast("Ficha "+(CUR.values.ponto||"")+" finalizada");CUR=null;view="home";render();window.scrollTo(0,0);
+  };
+  refresh();
+}
+
+function renderChildren(node,host,ctx,errs,k){
+  for(const c of node.children){
+    if(c.kind==="group"){renderChildren(c,host,ctx,errs,k);continue;}
+    if(c.kind==="repeat"){host.appendChild(renderRepeat(c,errs));continue;}
+    const t=baseType(c.t);if(META.has(t)||t==="calculate")continue;
+    host.appendChild(renderLeaf(c,ctx,errs,k));
+  }
+}
+function renderLeaf(leaf,ctx,errs,k){
+  const t=baseType(leaf.t),list=listOf(leaf.t),store=ctx||CUR.values,val=store[leaf.n];
+  const w=document.createElement("div");w.className="q";w.dataset.n=leaf.n;if(ctx)w.dataset.k=k;w._ctx=ctx;
+  if(t==="note"){
+    const isImg=!!leaf.img;
+    const n=el(`<div class="note${leaf.n==="pct_aviso"?" warn":(isImg?"":" info")}"></div>`);n.dataset.tpl=leaf.l;n.innerHTML=interp(leaf.l,ctx);
+    if(isImg){const im=document.createElement("img");im.src="img/"+leaf.img;im.alt=leaf.l;im.loading="lazy";n.appendChild(im);}
+    w.appendChild(n);return w;
+  }
+  if(list==="ver"){
+    const on=SEL(val,"ver");const b=el(`<button type="button" class="ref" aria-pressed="${on}">${esc(leaf.l)} ${on?"▲":"▼"}</button>`);
+    b.onclick=()=>{store[leaf.n]=on?[]:["ver"];saveCur();render();};w.appendChild(b);return w;
+  }
+  const lab=el(`<div class="qlabel"><span class="txt">${esc(leaf.l)}<span class="req" hidden> *</span></span></div>`);w.appendChild(lab);
+  w._star=lab.querySelector(".req");
+  if(leaf.g){
+    const gb=el(`<button type="button" class="gbtn" aria-expanded="false" aria-label="Ajuda">!</button>`);lab.appendChild(gb);
+    const gd=el(`<div class="guid" hidden></div>`);gd.textContent=leaf.g;w.appendChild(gd);
+    gb.onclick=()=>{gd.hidden=!gd.hidden;gb.setAttribute("aria-expanded",String(!gd.hidden));};
+  }
+  if(leaf.h){const h=el(`<div class="hint"></div>`);h.textContent=leaf.h;w.appendChild(h);}
+  const id="f_"+leaf.n+(ctx?"_"+k:"");
+  const set=v=>{store[leaf.n]=v;if(leaf.n==="geologo"&&v){SETTINGS.geologo=v;DB.set("settings",SETTINGS);}onChange();};
+  if(t==="select_one"&&leaf.app==="minimal"){
+    const s=el(`<select class="inp" id="${id}"><option value="">— selecione —</option>${CH[list].map(o=>`<option value="${o[0]}"${String(val)===o[0]?" selected":""}>${esc(o[1])}</option>`).join("")}</select>`);
+    s.onchange=()=>set(s.value);w.appendChild(s);
+  }else if(t==="select_one"||t==="select_multiple"){
+    const multi=t==="select_multiple",opts=CH[list];
+    const box=el(`<div class="opts${opts.length>=6&&Math.max(...opts.map(o=>o[1].length))<=20?" two":""}"></div>`);
+    opts.forEach((o,j)=>{
+      const on=multi?SEL(val,o[0]):String(val)===o[0];
+      const l=el(`<label class="opt${on?" on":""}"><input type="${multi?"checkbox":"radio"}" name="${id}" id="${id}_${j}"${on?" checked":""}><span></span></label>`);
+      l.querySelector("span").textContent=o[1];
+      const inp=l.querySelector("input");
+      inp.onclick=()=>{
+        if(multi){let a=Array.isArray(store[leaf.n])?[...store[leaf.n]]:[];a=inp.checked?[...a,o[0]]:a.filter(x=>x!==o[0]);set(a);}
+        else if(String(store[leaf.n])===o[0]){inp.checked=false;set("");}else set(o[0]);
+        box.querySelectorAll(".opt").forEach(x=>x.classList.toggle("on",x.querySelector("input").checked));
+      };
+      box.appendChild(l);
+    });
+    w.appendChild(box);
+  }else if(t==="integer"){
+    const i=el(`<input type="number" inputmode="numeric" id="${id}">`);i.value=val??"";i.oninput=()=>set(i.value===""?"":Number(i.value));w.appendChild(i);
+  }else if(t==="text"){
+    const multi=leaf.app==="multiline";const i=el(multi?`<textarea id="${id}"></textarea>`:`<input type="text" id="${id}" autocomplete="off">`);
+    i.value=val??"";i.oninput=()=>set(i.value);w.appendChild(i);
+  }else if(t==="image"){w.appendChild(drawPad());}
+  const e=(errs||[]).find(x=>x.n===leaf.n&&(ctx?x.k===k:x.k===undefined));
+  if(e){const d=el(`<div class="err"></div>`);d.textContent=e.e;w.appendChild(d);}
+  return w;
+}
+function renderRepeat(rep,errs){
+  const w=el(`<div class="q" data-rep="1"></div>`);w.dataset.n=rep.n;
+  w.appendChild(el(`<div class="qlabel"><span class="txt">${esc(rep.l)}</span></div>`));
+  if(!CUR.medidas.length)w.appendChild(el(`<div class="muted">Nenhuma medida registrada.</div>`));
+  CUR.medidas.forEach((m,k)=>{
+    const c=el(`<div class="inst"><div class="inst-h"><span>Medida ${k+1}</span><button type="button" class="btn" style="padding:5px 10px">Remover</button></div></div>`);
+    c.querySelector("button").onclick=()=>{CUR.medidas.splice(k,1);saveCur();render();};
+    renderChildren(rep.children[0],c,m,errs,k);w.appendChild(c);
+  });
+  const add=el(`<button type="button" class="btn">+ Adicionar medida</button>`);add.onclick=()=>{CUR.medidas.push({});saveCur();render();};
+  w.appendChild(add);return w;
+}
+function drawPad(){
+  const box=el(`<div style="display:flex;flex-direction:column;gap:6px"><canvas class="draw" id="f_croqui"></canvas><div class="row" style="align-items:center"><span class="muted">Desenhe com o dedo</span><button type="button" class="btn" style="flex:0 0 auto;padding:6px 12px">Limpar</button></div></div>`);
+  const c=box.querySelector("canvas"),clr=box.querySelector("button");
+  requestAnimationFrame(()=>{
+    const r=c.getBoundingClientRect(),dpr=window.devicePixelRatio||1;c.width=r.width*dpr;c.height=r.height*dpr;
+    const g=c.getContext("2d");g.scale(dpr,dpr);g.fillStyle="#fff";g.fillRect(0,0,r.width,r.height);g.lineWidth=2.4;g.lineCap="round";g.lineJoin="round";g.strokeStyle="#111";
+    if(CUR.croqui){const im=new Image();im.onload=()=>g.drawImage(im,0,0,r.width,r.height);im.src=CUR.croqui;}
+    let down=false;const p=e=>{const b=c.getBoundingClientRect();return[e.clientX-b.left,e.clientY-b.top];};
+    c.onpointerdown=e=>{down=true;c.setPointerCapture(e.pointerId);const[x,y]=p(e);g.beginPath();g.moveTo(x,y);};
+    c.onpointermove=e=>{if(!down)return;const[x,y]=p(e);g.lineTo(x,y);g.stroke();};
+    c.onpointerup=c.onpointercancel=()=>{if(!down)return;down=false;CUR.croqui=c.toDataURL("image/png");CUR.values.croqui="sim";saveCur();};
+    clr.onclick=()=>{g.fillStyle="#fff";g.fillRect(0,0,r.width,r.height);CUR.croqui=null;CUR.values.croqui="";saveCur();};
+  });
+  return box;
+}
+function refresh(){
+  if(view!=="form")return;
+  recompute();
+  document.querySelectorAll("#body .q").forEach(w=>{
+    const n=w.dataset.n;
+    if(w.dataset.rep){w.hidden=REL[n]===false;return;}
+    const leaf=BYNAME[n];
+    w.hidden=w.dataset.k!==undefined?!ev(leaf.rel,CUR.medidas[+w.dataset.k]):REL[n]===false;
+    if(w._star&&leaf.req)w._star.hidden=!ev(leaf.req,w._ctx);
+    const note=w.querySelector(".note");
+    if(note&&note.dataset.tpl&&!note.querySelector("img"))note.innerHTML=interp(note.dataset.tpl,w._ctx);
+  });
+  const h=document.querySelector(".top h1");if(h)h.textContent=CUR.values.ponto||"Nova ficha";
+}
+
+/* ================= exportação ================= */
+function cell(leaf,v){if(isEmpty(v))return "";const list=listOf(leaf.t);if(list)return Array.isArray(v)?v.map(x=>choiceLabel(list,x)).join("; "):choiceLabel(list,v);return v;}
+function recordRows(rec){
+  const prev=CUR;CUR=rec;recompute();
+  const row={ponto:rec.values.ponto||"",geologo:cell(BYNAME.geologo,rec.values.geologo),status:rec.status,criado:fmtIso(rec.created),atualizado:fmtIso(rec.updated)};
+  for(const c of EXCOLS){if(c==="ponto"||c==="geologo")continue;
+    if(REL[c]===false){row[c]="";continue;}
+    const leaf=BYNAME[c];
+    row[c]=baseType(leaf.t)==="calculate"?CALC[c]:(c==="croqui"?(rec.croqui?safe(rec.values.ponto||rec.id)+".png":""):cell(leaf,rec.values[c]));
+  }
+  const med=REL.medidas===false?[]:rec.medidas.map((m,i)=>({ponto:row.ponto,geologo:row.geologo,n:i+1,
+    tipo_estrutura:cell(BYNAME.tipo_estrutura,m.tipo_estrutura),dir_merg:m.dir_merg??"",mergulho:m.mergulho??"",
+    medida_clar:(m.dir_merg!=null&&m.dir_merg!==""?String(m.dir_merg).padStart(3,"0"):"")+"/"+(m.mergulho!=null&&m.mergulho!==""?String(m.mergulho).padStart(2,"0"):""),
+    obs_estrutura:m.obs_estrutura||""}));
+  CUR=prev;if(CUR)recompute();
+  return{row,med};
+}
+function fmtIso(iso){const d=new Date(iso),p=n=>String(n).padStart(2,"0");return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;}
+const safe=s=>String(s).replace(/[^\w\-]+/g,"_");
+function buildWorkbook(recs){
+  const rows=[],meds=[];
+  for(const r of [...recs].sort((a,b)=>(a.values.ponto||"").localeCompare(b.values.ponto||"",undefined,{numeric:true}))){const x=recordRows(r);rows.push(x.row);meds.push(...x.med);}
+  const wb=XLSX.utils.book_new();
+  const head=["ponto","geologo","status","criado","atualizado",...EXCOLS.filter(c=>c!=="ponto"&&c!=="geologo")];
+  const ws1=XLSX.utils.json_to_sheet(rows,{header:head});ws1["!cols"]=head.map(h=>({wch:Math.min(40,Math.max(10,h.length+2))}));ws1["!freeze"]={xSplit:1,ySplit:1};
+  XLSX.utils.book_append_sheet(wb,ws1,"pontos");
+  const mh=["ponto","geologo","n","tipo_estrutura","dir_merg","mergulho","medida_clar","obs_estrutura"];
+  const ws2=XLSX.utils.json_to_sheet(meds,{header:mh});ws2["!cols"]=mh.map(()=>({wch:16}));
+  XLSX.utils.book_append_sheet(wb,ws2,"medidas");
+  const dic=head.map(h=>({campo:h,pergunta:BYNAME[h]?(BYNAME[h].l||"(calculado)"):{status:"rascunho / final",criado:"data de criação",atualizado:"última alteração"}[h]||""}));
+  const ws3=XLSX.utils.json_to_sheet(dic,{header:["campo","pergunta"]});ws3["!cols"]=[{wch:22},{wch:60}];
+  XLSX.utils.book_append_sheet(wb,ws3,"dicionario");
+  return XLSX.write(wb,{bookType:"xlsx",type:"array"});
+}
+async function buildZip(recs,nome){
+  const zip=new JSZip();
+  zip.file(nome+".xlsx",buildWorkbook(recs));
+  zip.file(nome+"_backup.json",JSON.stringify({app:"berg-fichas",appVersion:APP_VERSION,formVersion:F.version,exportedAt:nowIso(),fichas:recs},null,1));
+  for(const r of recs)if(r.croqui)zip.file("croquis/"+safe(r.values.ponto||r.id)+".png",r.croqui.split(",")[1],{base64:true});
+  return zip.generateAsync({type:"blob",compression:"DEFLATE"});
+}
+function stamp(){const d=new Date(),p=n=>String(n).padStart(2,"0");return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;}
+async function shareOrDownload(blob,filename){
+  const file=new File([blob],filename,{type:"application/zip"});
+  if(navigator.canShare&&navigator.canShare({files:[file]})){
+    try{await navigator.share({files:[file],title:filename});return "shared";}
+    catch(e){if(e.name==="AbortError")return "cancel";}
+  }
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=filename;document.body.appendChild(a);a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},4000);return "download";
+}
+function renderExport(){
+  const pend=pendentes();
+  app.innerHTML="";
+  app.appendChild(el(`<div class="top"><button id="home">‹ Início</button><h1>Exportar fichas</h1></div>`));
+  const m=el(`<div class="main"></div>`);app.appendChild(m);
+  m.appendChild(el(`<div class="muted">Gera um arquivo .zip com: planilha Excel (abas pontos, medidas e dicionário), croquis em PNG e um backup. Envie por WhatsApp, e-mail ou Drive.</div>`));
+  m.appendChild(el(`<div class="kv"><span>Não exportadas</span><b>${pend.length}</b><span>Total no celular</span><b>${RECS.length}</b><span>Rascunhos</span><b>${RECS.filter(r=>r.status!=="final").length}</b></div>`));
+  const b1=el(`<button class="btn primary big">Exportar não exportadas (${pend.length})</button>`);b1.disabled=!pend.length;m.appendChild(b1);
+  const b2=el(`<button class="btn">Exportar todas (${RECS.length})</button>`);b2.disabled=!RECS.length;m.appendChild(b2);
+  m.appendChild(el(`<div class="muted">Rascunhos também são exportados (coluna “status”). Depois de exportar, a ficha continua no celular até você excluí-la.</div>`));
+  const go=async recs=>{
+    try{
+      toast("Gerando arquivo…");
+      const geo=safe(choiceLabel("geologos",SETTINGS.geologo||"")||"equipe");
+      const nome=`BERG_fichas_${geo}_${stamp()}`;
+      const blob=await buildZip(recs,nome);
+      const r=await shareOrDownload(blob,nome+".zip");
+      if(r==="cancel"){toast("Envio cancelado – fichas continuam como não exportadas");return;}
+      const t=nowIso();for(const x of recs){x.exported=true;x.exportedAt=t;await DB.put(x);}
+      toast(r==="shared"?"Arquivo enviado":"Arquivo salvo em Downloads");view="home";render();
+    }catch(e){console.error(e);toast("Erro na exportação: "+e.message,5000);}
+  };
+  b1.onclick=()=>go(pend);b2.onclick=()=>go(RECS);
+  $("home").onclick=()=>{view="home";render();};
+}
+
+/* ================= mais: consolidar, restaurar, sobre ================= */
+let deferredInstall=null;
+window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();deferredInstall=e;if(view==="more")render();});
+async function readFiles(files){
+  const out=[];
+  for(const f of files){
+    try{
+      if(/\.json$/i.test(f.name)){out.push(...(JSON.parse(await f.text()).fichas||[]));}
+      else{const z=await JSZip.loadAsync(f);for(const name of Object.keys(z.files))if(/_backup\.json$/i.test(name))out.push(...(JSON.parse(await z.files[name].async("string")).fichas||[]));}
+    }catch(e){toast("Não consegui ler "+f.name);}
+  }
+  const map=new Map();for(const r of out){const o=map.get(r.id);if(!o||o.updated<r.updated)map.set(r.id,r);}
+  return [...map.values()];
+}
+function renderMore(){
+  app.innerHTML="";
+  app.appendChild(el(`<div class="top"><button id="home">‹ Início</button><h1>Mais opções</h1></div>`));
+  const m=el(`<div class="main"></div>`);app.appendChild(m);
+  m.appendChild(el(`<h2>Consolidar arquivos da equipe</h2>`));
+  m.appendChild(el(`<div class="muted">No escritório (computador ou celular): selecione os .zip recebidos de cada geólogo. O app junta tudo numa planilha única, sem duplicar fichas.</div>`));
+  const bc=el(`<button class="btn primary">Selecionar arquivos para consolidar</button>`);m.appendChild(bc);
+  const res=el(`<div></div>`);m.appendChild(res);
+  m.appendChild(el(`<h2>Restaurar backup neste celular</h2>`));
+  m.appendChild(el(`<div class="muted">Use se trocar de celular ou reinstalar o app: carrega as fichas de um arquivo exportado.</div>`));
+  const br=el(`<button class="btn">Restaurar de arquivo</button>`);m.appendChild(br);
+  m.appendChild(el(`<h2>Instalação e armazenamento</h2>`));
+  const inst=el(`<button class="btn">Instalar app na tela inicial</button>`);inst.hidden=!deferredInstall;m.appendChild(inst);
+  const st=el(`<div class="kv"></div>`);m.appendChild(st);
+  m.appendChild(el(`<div class="muted">Se o botão “Instalar” não aparecer: menu ⋮ do Chrome → “Adicionar à tela inicial” / “Instalar app”.</div>`));
+  const fin=$("filein");
+  bc.onclick=()=>{fin.onchange=async()=>{
+    const recs=await readFiles([...fin.files]);fin.value="";
+    if(!recs.length){res.innerHTML="";res.appendChild(el(`<div class="banner warn">Nenhuma ficha encontrada nos arquivos.</div>`));return;}
+    const porGeo={};for(const r of recs){const g=choiceLabel("geologos",r.values.geologo||"")||"(sem geólogo)";porGeo[g]=(porGeo[g]||0)+1;}
+    res.innerHTML="";
+    res.appendChild(el(`<div class="banner info" style="flex-direction:column;align-items:flex-start"><b>${recs.length} fichas encontradas</b><span>${Object.entries(porGeo).map(([g,n])=>esc(g)+": "+n).join(" · ")}</span></div>`));
+    const g=el(`<button class="btn primary big" style="margin-top:8px">Gerar planilha consolidada</button>`);res.appendChild(g);
+    g.onclick=async()=>{const nome="BERG_fichas_CONSOLIDADO_"+stamp();await shareOrDownload(await buildZip(recs,nome),nome+".zip");};
+  };fin.click();};
+  br.onclick=()=>{fin.onchange=async()=>{
+    const recs=await readFiles([...fin.files]);fin.value="";
+    let n=0;for(const r of recs){const o=RECS.find(x=>x.id===r.id);if(o&&o.updated>=r.updated)continue;await DB.put(r);n++;}
+    RECS=await DB.all();toast(n+" fichas restauradas");view="home";render();
+  };fin.click();};
+  inst.onclick=async()=>{if(!deferredInstall)return;deferredInstall.prompt();await deferredInstall.userChoice;deferredInstall=null;render();};
+  (async()=>{
+    let persist="não suportado",uso="";
+    try{if(navigator.storage&&navigator.storage.persisted)persist=(await navigator.storage.persisted())?"protegido ✓":"não protegido";}catch(e){}
+    try{if(navigator.storage&&navigator.storage.estimate){const e=await navigator.storage.estimate();uso=(e.usage/1048576).toFixed(1)+" MB";}}catch(e){}
+    st.innerHTML=`<span>Versão do app</span><b>${APP_VERSION}</b><span>Versão da ficha</span><b>${esc(F.version)}</b><span>Armazenamento</span><b>${persist}</b><span>Espaço usado</span><b>${uso||"—"}</b><span>Modo</span><b>${navigator.onLine?"online":"offline"}</b>`;
+  })();
+  $("home").onclick=()=>{view="home";render();};
+}
+
+/* ================= início ================= */
+(async function init(){
+  try{
+    RECS=await DB.all();
+    SETTINGS=Object.assign(SETTINGS,(await DB.get("settings"))||{});
+  }catch(e){app.innerHTML=`<div class="main"><div class="banner warn">Não foi possível abrir o armazenamento do celular (${esc(e.message)}). Saia do modo anônimo do navegador.</div></div>`;return;}
+  try{if(navigator.storage&&navigator.storage.persist)await navigator.storage.persist();}catch(e){}
+  render();
+  if("serviceWorker"in navigator&&location.protocol!=="file:"){
+    navigator.serviceWorker.register("sw.js").catch(e=>console.warn("SW",e));
+    const hadController=!!navigator.serviceWorker.controller;let reloaded=false;
+    navigator.serviceWorker.addEventListener("controllerchange",()=>{
+      if(reloaded||!hadController)return;
+      if(view==="home"){reloaded=true;location.reload();}
+      else{window.__reloadOnHome=true;toast("Nova versão instalada – será aplicada ao voltar ao início",4000);}
+    });
+  }
+})();
