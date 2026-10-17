@@ -1,8 +1,8 @@
 /* Ficha de Ponto BERG – app offline. Formulário gerado do XLSForm (form.js). */
 "use strict";
-const APP_VERSION = "0.7.0";
+const APP_VERSION = "0.8.1";
 const F = window.FORM, CH = F.choices;
-const SEC_COLORS = {g_ident:"#201F1E",g_aflor:"#7A5A2E",g_macro:"#800000",g_miner:"#800000",g_testes:"#9A6B1E",g_estr:"#3F6B3F",g_alt:"#5C1F1F",g_interp:"#6E6659",g_obs:"#201F1E"};
+const SEC_COLORS = {g_ident:"#201F1E",g_aflor:"#7A5A2E",g_macro:"#8F3032",g_miner:"#8F3032",g_testes:"#9A6B1E",g_estr:"#3F6B3F",g_alt:"#5C1F1F",g_interp:"#6E6659",g_obs:"#201F1E"};
 const META = new Set(["start","end","today"]);
 const NAO_DUPLICAR = new Set(["ponto","amostra","observacoes","croqui"]);
 
@@ -270,7 +270,7 @@ function renderForm(){
   app.innerHTML="";
   const top=el(`<div class="top"><button id="home">‹ Fichas</button><h1>${esc(CUR.values.ponto||"Nova ficha")}</h1><select id="jump" aria-label="Ir para seção"><option value="">☰ Seções</option>${vis.map(i=>`<option value="${i}">${esc(SCREENS[i].l)}</option>`).join("")}</select></div>`);
   app.appendChild(top);
-  app.appendChild(el(`<div class="band" style="background:${SEC_COLORS[sc.n]||"#800000"}"><span>${esc(sc.l)}</span><small>${pos+1}/${vis.length}</small></div>`));
+  app.appendChild(el(`<div class="band" style="background:${SEC_COLORS[sc.n]||"#8F3032"}"><span>${esc(sc.l)}</span><small>${pos+1}/${vis.length}</small></div>`));
   app.appendChild(el(`<div class="progress"><i style="width:${(pos+1)/vis.length*100}%"></i></div>`));
   const m=el(`<div class="main" id="body"></div>`);app.appendChild(m);
   if(dupFrom&&screenIdx===vis[0])m.appendChild(el(`<div class="banner info">Campos copiados de <b>${esc(dupFrom)}</b>. Revise tudo antes de finalizar.</div>`));
@@ -327,7 +327,12 @@ function renderLeaf(leaf,ctx,errs,k){
   if(leaf.h){const h=el(`<div class="hint"></div>`);h.textContent=leaf.h;w.appendChild(h);}
   const id="f_"+leaf.n+(ctx?"_"+k:"");
   const set=v=>{store[leaf.n]=v;if(leaf.n==="geologo"&&v){SETTINGS.geologo=v;DB.set("settings",SETTINGS);}onChange();};
-  if(t==="select_one"&&leaf.app==="minimal"){
+  if(list&&list.startsWith("${")){   // seleção a partir das medidas registradas (repeat)
+    const s=el(`<select class="inp" id="${id}" data-dyn="1"></select>`);s._leaf=leaf;fillDyn(s,leaf,val);
+    s.onchange=()=>set(s.value);w.appendChild(s);
+    const vazio=el(`<div class="hint" data-dynempty="1">Nenhuma fratura registrada ainda. Adicione em “Medida estrutural (Clar)” acima.</div>`);
+    vazio.hidden=s.options.length>1;w.appendChild(vazio);
+  }else if(t==="select_one"&&leaf.app==="minimal"){
     const s=el(`<select class="inp" id="${id}"><option value="">— selecione —</option>${CH[list].map(o=>`<option value="${o[0]}"${String(val)===o[0]?" selected":""}>${esc(o[1])}</option>`).join("")}</select>`);
     s.onchange=()=>set(s.value);w.appendChild(s);
   }else if(t==="select_one"||t==="select_multiple"){
@@ -356,6 +361,15 @@ function renderLeaf(leaf,ctx,errs,k){
   if(e){const d=el(`<div class="err"></div>`);d.textContent=e.e;w.appendChild(d);}
   return w;
 }
+function dynOptions(leaf){
+  const out=[];for(const m of CUR.medidas){if(!ev(leaf.cf,m))continue;const t=calc("medida_txt",m);if(t&&m.dir_merg!==""&&m.dir_merg!=null&&!out.includes(t))out.push(t);}
+  return out;
+}
+function fillDyn(s,leaf,val){
+  const opts=dynOptions(leaf);if(val&&!opts.includes(val))opts.push(val);
+  const sig=opts.join("|")+"#"+val;if(s._sig===sig)return;s._sig=sig;
+  s.innerHTML=`<option value="">— escolha a medida —</option>`+opts.map(o=>`<option value="${esc(o)}"${o===val?" selected":""}>${esc(o)}</option>`).join("");
+}
 function renderRepeat(rep,errs){
   const w=el(`<div class="q" data-rep="1"></div>`);w.dataset.n=rep.n;
   w.appendChild(el(`<div class="qlabel"><span class="txt">${esc(rep.l)}</span></div>`));
@@ -363,7 +377,7 @@ function renderRepeat(rep,errs){
   CUR.medidas.forEach((m,k)=>{
     const c=el(`<div class="inst"><div class="inst-h"><span>Medida ${k+1}</span><button type="button" class="btn" style="padding:5px 10px">Remover</button></div></div>`);
     c.querySelector("button").onclick=()=>{CUR.medidas.splice(k,1);saveCur();render();};
-    renderChildren(rep.children[0],c,m,errs,k);w.appendChild(c);
+    renderChildren(rep,c,m,errs,k);w.appendChild(c);
   });
   const add=el(`<button type="button" class="btn">+ Adicionar medida</button>`);add.onclick=()=>{CUR.medidas.push({});saveCur();render();};
   w.appendChild(add);return w;
@@ -392,6 +406,8 @@ function refresh(){
     const leaf=BYNAME[n];
     w.hidden=w.dataset.k!==undefined?!ev(leaf.rel,CUR.medidas[+w.dataset.k]):REL[n]===false;
     if(w._star&&leaf.req)w._star.hidden=!ev(leaf.req,w._ctx);
+    const dyn=w.querySelector("select[data-dyn]");
+    if(dyn&&document.activeElement!==dyn){fillDyn(dyn,leaf,CUR.values[n]||"");const ve=w.querySelector("[data-dynempty]");if(ve)ve.hidden=dyn.options.length>1;}
     const note=w.querySelector(".note");
     if(note&&note.dataset.tpl&&!note.querySelector("img"))note.innerHTML=interp(note.dataset.tpl,w._ctx);
   });
@@ -399,7 +415,8 @@ function refresh(){
 }
 
 /* ================= exportação ================= */
-function cell(leaf,v){if(isEmpty(v))return "";const list=listOf(leaf.t);if(list)return Array.isArray(v)?v.map(x=>choiceLabel(list,x)).join("; "):choiceLabel(list,v);return v;}
+const curto=t=>String(t).split(": ")[0];
+function cell(leaf,v){if(isEmpty(v))return "";const list=listOf(leaf.t);if(list)return Array.isArray(v)?v.map(x=>curto(choiceLabel(list,x))).join("; "):curto(choiceLabel(list,v));return v;}
 function recordRows(rec){
   const prev=CUR;CUR=rec;recompute();
   const row={projeto:rec.projeto||"",ponto:rec.values.ponto||"",geologo:cell(BYNAME.geologo,rec.values.geologo),status:rec.status,criado:fmtIso(rec.created),atualizado:fmtIso(rec.updated)};
