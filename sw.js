@@ -1,5 +1,5 @@
 // Service worker: guarda o app inteiro no celular para funcionar sem internet.
-const CACHE = "berg-fichas-0.8.2-cac44dd2";
+const CACHE = "berg-fichas-0.8.3-d8cdcd30";
 const ASSETS = ["./", "index.html", "app.js", "form.js", "manifest.webmanifest", "lib/xlsx.mini.min.js", "lib/jszip.min.js", "img/ex_1.jpg", "img/ex_2.jpg", "img/ex_3.jpg", "img/ex_4.jpg", "img/ref_alteracao.jpg", "img/ref_dureza.jpg", "img/ref_estruturas.jpg", "img/ref_granulometria.jpg", "img/ref_indice_cor.jpg", "img/ref_percentual.jpg", "icons/apple-touch-icon.png", "icons/icon-192.png", "icons/icon-512.png", "icons/logo-header.png", "icons/maskable-512.png"];
 
 self.addEventListener("install", (e) => {
@@ -18,7 +18,16 @@ self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
   const url = new URL(e.request.url);
   if (url.origin !== location.origin) return;
-  // Primeiro o que está guardado no celular; internet só se faltar algo.
+  // Manifesto e ícones: sempre da internet quando houver (a instalação no Android compara com o servidor).
+  if (url.pathname.endsWith("manifest.webmanifest") || url.pathname.includes("/icons/")) {
+    e.respondWith(
+      fetch(e.request, { cache: "no-store" })
+        .then((r) => { const cp = r.clone(); caches.open(CACHE).then((c) => c.put(e.request, cp)); return r; })
+        .catch(() => caches.match(e.request, { ignoreSearch: true }))
+    );
+    return;
+  }
+  // Demais arquivos: primeiro o que está guardado no celular; internet só se faltar algo.
   e.respondWith(
     caches.match(e.request, { ignoreSearch: true }).then((hit) => {
       if (hit) return hit;

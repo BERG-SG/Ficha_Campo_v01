@@ -1,6 +1,6 @@
 /* Ficha de Ponto BERG – app offline. Formulário gerado do XLSForm (form.js). */
 "use strict";
-const APP_VERSION = "0.8.2";
+const APP_VERSION = "0.8.3";
 const F = window.FORM, CH = F.choices;
 const SEC_COLORS = {g_ident:"#201F1E",g_aflor:"#7A5A2E",g_macro:"#8F3032",g_miner:"#8F3032",g_testes:"#9A6B1E",g_estr:"#3F6B3F",g_alt:"#5C1F1F",g_interp:"#6E6659",g_obs:"#201F1E"};
 const META = new Set(["start","end","today"]);
@@ -520,6 +520,12 @@ function renderMore(){
   m.appendChild(el(`<div class="muted">Use se trocar de celular ou reinstalar o app: carrega as fichas de um arquivo exportado.</div>`));
   const br=el(`<button class="btn">Restaurar de arquivo</button>`);m.appendChild(br);
   m.appendChild(el(`<h2>Instalação e armazenamento</h2>`));
+  const upd=el(`<button class="btn">Buscar atualização do app agora</button>`);m.appendChild(upd);
+  upd.onclick=async()=>{
+    if(!navigator.onLine){toast("Sem internet – conecte e tente de novo");return;}
+    try{const reg=await navigator.serviceWorker.getRegistration();if(reg)await reg.update();toast("Atualizando…");setTimeout(()=>location.reload(),1500);}
+    catch(e){toast("Não foi possível atualizar: "+e.message);}
+  };
   const inst=el(`<button class="btn">Instalar app na tela inicial</button>`);inst.hidden=!deferredInstall;m.appendChild(inst);
   const st=el(`<div class="kv"></div>`);m.appendChild(st);
   m.appendChild(el(`<div class="muted">Se o botão “Instalar” não aparecer: menu ⋮ do Chrome → “Adicionar à tela inicial” / “Instalar app”.</div>`));
