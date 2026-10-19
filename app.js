@@ -1,10 +1,10 @@
 /* Ficha de Ponto BERG – app offline. Formulário gerado do XLSForm (form.js). */
 "use strict";
-const APP_VERSION = "0.9.4";
+const APP_VERSION = "0.10.0";
 const F = window.FORM, CH = F.choices;
 const SEC_COLORS = {g_ident:"#201F1E",g_aflor:"#7A5A2E",g_macro:"#8F3032",g_miner:"#8F3032",g_testes:"#9A6B1E",g_estr:"#3F6B3F",g_alt:"#5C1F1F",g_interp:"#6E6659",g_obs:"#201F1E"};
 const META = new Set(["start","end","today"]);
-const NAO_DUPLICAR = new Set(["ponto","amostra","observacoes","croqui"]);
+const NAO_DUPLICAR = new Set(["ponto","amostra","observacoes","croqui","texto_descritivo"]);
 
 /* ================= árvore do formulário ================= */
 function buildTree(rows){
@@ -117,10 +117,18 @@ let saveTimer;
 function saveCur(){clearTimeout(saveTimer);saveTimer=setTimeout(()=>{if(!CUR)return;CUR.updated=nowIso();CUR.exported=false;DB.put(CUR).catch(e=>toast("Erro ao salvar: "+e.message));},300);}
 function onChange(){saveCur();clearTimeout(onChange._t);onChange._t=setTimeout(refresh,50);}
 
+const codNorm=c=>String(c||"").trim().toUpperCase();
+function codigoUsado(code,exceptId){const k=codNorm(code);if(!k)return null;return recsProj().find(r=>r.id!==exceptId&&codNorm(r.values.ponto)===k)||null;}
+function proximoCodigo(code){
+  const m=String(code).match(/^(.*?)(\d+)(\D*)$/);
+  if(!m)return String(code)+"-2";
+  return m[1]+String(Number(m[2])+1).padStart(m[2].length,"0")+m[3];
+}
+function codigoLivre(code,exceptId){let c=code,i=0;while(codigoUsado(c,exceptId)&&i<500){c=proximoCodigo(c);i++;}return c;}
 function sugerirCodigo(){
   const last=byCreated()[0];if(!last||!last.values.ponto)return "";
-  const m=String(last.values.ponto).match(/^(.*?)(\d+)(\D*)$/);if(!m)return "";
-  const n=String(Number(m[2])+1).padStart(m[2].length,"0");return m[1]+n+m[3];
+  if(!/\d/.test(last.values.ponto))return "";
+  return codigoLivre(proximoCodigo(last.values.ponto));
 }
 async function novaFicha(baseId){
   const base=baseId?RECS.find(r=>r.id===baseId):null;
@@ -161,7 +169,7 @@ function renderProjects(){
   f.onsubmit=async e=>{e.preventDefault();const n=$("pnome").value.trim();if(!n){toast("Digite o nome do projeto");return;}
     if(listaProjetos().some(p=>p.nome.toLowerCase()===n.toLowerCase())){toast("Já existe um projeto com esse nome");return;}
     PROJS.push({nome:n,criado:nowIso()});await salvarProjs();PROJ=n;view="home";render();window.scrollTo(0,0);};
-  if(pendTot)m.appendChild(el(`<div class="banner warn"><span><b>${pendTot}</b> ficha${pendTot>1?"s":""} não exportada${pendTot>1?"s":""} no total</span></div>`));
+  const bx=bannerExport(RECS);if(bx){m.appendChild(bx);bx.querySelector("[data-exp]").onclick=()=>{PROJ=null;view="export";render();};}
   m.appendChild(el(`<h2>Projetos (${projs.length})</h2>`));
   const list=el(`<div class="list"></div>`);m.appendChild(list);
   if(!projs.length)list.appendChild(el(`<div class="muted">Nenhum projeto ainda. Digite o nome acima e toque em “Criar”.</div>`));
@@ -200,6 +208,20 @@ function longPress(node,onLong,onTap){
   node.addEventListener("pointerup",cancel);node.addEventListener("pointerleave",cancel);node.addEventListener("pointercancel",cancel);
   node.addEventListener("contextmenu",e=>e.preventDefault());
   node.addEventListener("click",e=>{if(fired){e.preventDefault();fired=false;return;}onTap();});
+}
+function diasDesde(iso){if(!iso)return null;const a=new Date(iso),b=new Date();a.setHours(0,0,0,0);b.setHours(0,0,0,0);return Math.round((b-a)/864e5);}
+function bannerExport(recs){
+  const pend=recs.filter(r=>!r.exported);if(!pend.length)return null;
+  const hoje=new Date();hoje.setHours(0,0,0,0);
+  const antigas=pend.filter(r=>new Date(r.updated)<hoje).length;
+  const d=diasDesde(SETTINGS.lastExport);
+  const ult=d===null?"nenhuma exportação feita neste celular":d===0?"última exportação hoje":d===1?"última exportação ontem":`última exportação há ${d} dias`;
+  const fimDia=new Date().getHours()>=17;
+  const cls=antigas?"danger-b":"warn";
+  let txt=`<b>${pend.length}</b> ficha${pend.length>1?"s":""} não exportada${pend.length>1?"s":""} · ${ult}`;
+  if(antigas)txt=`⚠ <b>${antigas}</b> ficha${antigas>1?"s":""} de dias anteriores ainda sem exportar!<br>`+txt;
+  else if(fimDia)txt=`🌙 Fim do dia: exporte as fichas antes de guardar o celular.<br>`+txt;
+  return el(`<div class="banner ${cls}"><span>${txt}</span><button class="btn" data-exp="1">Exportar</button></div>`);
 }
 function hora(iso){const d=new Date(iso),p=n=>String(n).padStart(2,"0");return `${p(d.getDate())}/${p(d.getMonth()+1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;}
 function resumoPonto(r){
@@ -242,7 +264,7 @@ function renderHome(){
     m.appendChild(el(`<button class="btn primary big" id="nova">+ Nova ficha</button>`));
     const dup=el(`<button class="btn" id="dup">⧉ Duplicar Ponto</button>`);
     dup.disabled=!RS.length;m.appendChild(dup);
-    if(pend)m.appendChild(el(`<div class="banner warn"><span><b>${pend}</b> ficha${pend>1?"s":""} não exportada${pend>1?"s":""}</span><button class="btn" id="exp1">Exportar</button></div>`));
+    const bx=bannerExport(RS);if(bx){bx.querySelector("[data-exp]").id="exp1";m.appendChild(bx);}
     else if(RS.length)m.appendChild(el(`<div class="banner ok">Todas as fichas deste projeto foram exportadas.</div>`));
     m.appendChild(el(`<h2>Fichas do projeto (${RS.length})</h2>`));
     if(RS.length)m.appendChild(el(`<div class="muted" style="margin-top:-10px">Toque e segure uma ficha para selecionar e excluir várias.</div>`));
@@ -303,6 +325,7 @@ function renderForm(){
   const errs=showErr?screenErrors(screenIdx):[];
   renderChildren(sc,m,null,errs);
   if(last){
+    m.appendChild(el(`<button class="btn" id="finexp" style="margin-top:6px">✓ Finalizar e exportar fichas do projeto</button>`));
     const z=el(`<div class="row" style="margin-top:12px"><button class="btn danger" id="del">Excluir esta ficha</button></div>`);m.appendChild(z);
     $("del").onclick=async()=>{if(!confirm("Excluir a ficha "+(CUR.values.ponto||"")+"? Isso não pode ser desfeito."))return;await DB.del(CUR.id);RECS=RECS.filter(r=>r.id!==CUR.id);CUR=null;view="home";render();toast("Ficha excluída");};
   }
@@ -315,13 +338,122 @@ function renderForm(){
     if(screenErrors(screenIdx).length){showErr=true;render();const e=document.querySelector(".err");if(e)e.scrollIntoView({block:"center"});toast("Corrija os campos marcados");return;}
     showErr=false;
     if(!last){screenIdx=vis[pos+1];render();window.scrollTo(0,0);return;}
-    for(const i of visibleScreens())if(screenErrors(i).length){screenIdx=i;showErr=true;render();toast("Há campos obrigatórios pendentes");return;}
-    CUR.status="final";CUR.updated=nowIso();CUR.exported=false;DB.put(CUR);
-    toast("Ficha "+(CUR.values.ponto||"")+" finalizada");CUR=null;view="home";render();window.scrollTo(0,0);
+    finalizar(false);
   };
+  if(last){const fe=$("finexp");if(fe)fe.onclick=()=>{if(screenErrors(screenIdx).length){showErr=true;render();toast("Corrija os campos marcados");return;}finalizar(true);};}
   refresh();
 }
 
+async function finalizar(exportar){
+  recompute();
+  for(const i of visibleScreens())if(screenErrors(i).length){screenIdx=i;showErr=true;render();toast("Há campos obrigatórios pendentes");return;}
+  const usado=codigoUsado(CUR.values.ponto,CUR.id);
+  if(usado&&!confirm(`Já existe a ficha ${usado.values.ponto} neste projeto. Finalizar mesmo assim com código repetido?`))return;
+  if(!CUR.texto_editado)CUR.values.texto_descritivo=gerarTexto(CUR);
+  CUR.status="final";CUR.updated=nowIso();CUR.exported=false;await DB.put(CUR);
+  toast("Ficha "+(CUR.values.ponto||"")+" finalizada");CUR=null;view=exportar?"export":"home";render();window.scrollTo(0,0);
+}
+/* ---------- texto descritivo automático ---------- */
+const low=s=>{s=String(s||"");return /^[A-ZÀ-Ú][a-zà-ú]/.test(s)?s.charAt(0).toLowerCase()+s.slice(1):s;};
+const cap=s=>{s=String(s||"");return s.charAt(0).toUpperCase()+s.slice(1);};
+const curtoL=(list,v)=>String(choiceLabel(list,v)).split(": ")[0].replace(/\s*\(.*?\)\s*$/,"");
+function juntar(a){a=a.filter(Boolean);if(a.length<2)return a.join("");return a.slice(0,-1).join(", ")+" e "+a[a.length-1];}
+function gerarTexto(rec){
+  const prev=CUR;CUR=rec;recompute();
+  const G=n=>REL[n]===false?"":(n in CALC?CALC[n]:rec.values[n]);
+  const L=(n,lower=true)=>{const v=G(n);if(isEmpty(v))return "";const l=listOf(BYNAME[n].t);
+    const fx=x=>{const t=curtoL(l,x).replace(" / -blástica","/porfiroblástica");return lower?low(t):t;};
+    return Array.isArray(v)?juntar(v.filter(x=>!["nenhuma","ausente","sem_interesse","nao_obs"].includes(x)).map(fx)):fx(v);};
+  const lit=sfx=>{const v=G("litotipo"+sfx);if(!v)return G("nome_rocha"+sfx)||"rocha";
+    const nome=v==="OUT"?(G("litotipo_outro"+sfx)||"rocha"):String(choiceLabel("litotipo",v)).split(" – ")[1].replace("metaconglom.","metaconglomerado").replace("Grt-bt","granada-biotita").replace("Hbl-bt","hornblenda-biotita");
+    const extra=G("nome_rocha"+sfx);return (extra?extra:low(nome))+(v!=="OUT"?` (${v})`:"");};
+  const P=[];const v=rec.values,tipo=G("tipo_ponto");
+  const corSolo=()=>{const p=String(G("cor_solo_desc")||"").split(" + ").map(x=>x.toLowerCase()).filter(Boolean);return p.length>1?`${p[0]} com tons de ${juntar(p.slice(1))}`:(p[0]||"");};
+  // contexto
+  const ctx=[];if(G("relevo"))ctx.push(`situado em ${L("relevo")}`);
+  if(G("uso_solo"))ctx.push(`em ${L("uso_solo")}${G("uso_solo_limite")?`, no limite com ${L("uso_solo_limite")}`:""}`);
+  if(!tipo){CUR=prev;if(CUR)recompute();return `Ponto ${G("ponto")||""}.`;}
+  if(tipo==="solo"){
+    let t=`Ponto ${G("ponto")||""}: ponto de solo${ctx.length?", "+ctx.join(", "):""}.`;
+    if(G("solo_nome"))t+=` ${G("solo_nome")}`;
+    if(G("cor_solo_desc"))t+=`${G("solo_nome")?",":" Solo"} de cor ${corSolo()}.`;else if(G("solo_nome"))t+=".";
+    P.push(t);
+  }else{
+    const ex=G("exposicao")||[];
+    const dims=ex.filter(x=>x.startsWith("aflor_")),outras=ex.filter(x=>!x.startsWith("aflor_"));
+    let abre=tipo==="contato"?"contato geológico exposto em afloramento":(tipo?low(curtoL("tipo_ponto",tipo)):"");
+    if(dims.length&&(tipo==="afloramento"||tipo==="contato"))abre=(tipo==="contato"?"contato geológico em ":"")+low(curtoL("exposicao",dims[0]));
+    if(outras.length)abre+=`${abre?", em ":""}${juntar(outras.map(x=>low(curtoL("exposicao",x))))}`;
+    let t=`Ponto ${G("ponto")||""}${abre?": "+abre:""}${G("dim_exposicao")?` (${G("dim_exposicao")} m)`:""}${G("inclinacao")?`, com inclinação ${L("inclinacao")}`:""}${ctx.length?", "+ctx.join(", "):""}.`;
+    if(L("feicoes"))t+=` Apresenta ${L("feicoes")}.`;
+    const GRAU={sao:"sã",pouco:"pouco alterada",moderado:"moderadamente alterada",muito:"muito alterada"};
+    if(G("grau_alt"))t+=` Rocha ${GRAU[G("grau_alt")]||L("grau_alt")}.`;
+    if(G("cor_solo_desc"))t+=` Solo de cor ${corSolo()}.`;
+    P.push(t);
+    const rocha=(sfx,quem)=>{
+      const S=n=>n+sfx;const a=[];
+      const temDado=["litotipo","cor_fresca","granulacao","estrutura","minerais","ima","dureza"].some(n=>!isEmpty(G(S(n))));
+      if(!temDado)return "";
+      let t=quem?`${quem}${lit(sfx)}`:cap(lit(sfx));
+      const cor=L(S("cor_fresca"));if(cor)a.push(`cor ${cor}`);
+      if(G(S("cor_alteracao")))a.push(`alterando para ${L(S("cor_alteracao"))}`);
+      if(G(S("indice_cor")))a.push(L(S("indice_cor")));
+      if(G(S("granulacao")))a.push(`granulação ${L(S("granulacao"))}`);
+      if(G(S("distribuicao")))a.push(L(S("distribuicao")));
+      if(G(S("estrutura")))a.push(`estrutura ${L(S("estrutura"))}`);
+      if(a.length)t+=`, ${a.join(", ")}`;t+=".";
+      if(G(S("cor_leucossoma"))||G(S("espessura_bandas")))t+=` Bandamento ${L(S("espessura_bandas"))||""}${G(S("cor_leucossoma"))?`, com leucossoma ${L(S("cor_leucossoma"))}`:""}${G(S("cor_melanossoma"))?` e melanossoma ${L(S("cor_melanossoma"))}`:""}.`.replace("Bandamento ,","Bandamento,");
+      const mins=(G(S("minerais"))||[]).map(c=>{const pct=G(S("pct_"+c));const nome=c==="outro"?(G(S("mineral_outro"))||"outro mineral"):low(choiceLabel("minerais",c));return nome+(pct!==""&&pct!=null?` (${pct}%)`:"");});
+      if(mins.length)t+=` Mineralogia estimada: ${juntar(mins)}.`;
+      const ts=[];
+      if(G(S("ima"))&&G(S("ima"))!=="nao_testado")ts.push(`magnetismo ${L(S("ima"))}${L(S("ima_obs"))?` (${L(S("ima_obs"))})`:""}`);
+      if(G(S("dureza"))&&G(S("dureza"))!=="nao_testado")ts.push(`dureza ${{unha:"< 2,5 (riscada pela unha)",canivete:"entre 2,5 e 5,5 (riscada pelo canivete)",tungstenio:"entre 5,5 e ~9 (riscada só pelo tungstênio)",nenhum:"> 9"}[G(S("dureza"))]||""}${L(S("dureza_obs"))?`, ${L(S("dureza_obs"))}`:""}`);
+      if(G(S("cor_risco"))&&G(S("cor_risco"))!=="nao_testado")ts.push(`risco ${L(S("cor_risco"))}`);
+      if(G(S("densidade")))ts.push(`densidade ${L(S("densidade"))}`);
+      if(G(S("hcl"))&&G(S("hcl"))!=="nao_testado")ts.push(G(S("hcl"))==="sem_reacao"?"sem reação ao HCl":`reação ao HCl ${L(S("hcl"))}`);
+      if(ts.length)t+=` ${cap(juntar(ts))}.`;
+      return t;
+    };
+    if(tipo==="contato"){
+      P.push(`Contato ${L("tipo_contato")||""} entre ${lit("")} na base e ${lit("_t")} no topo.`.replace("Contato  ","Contato "));
+      P.push(rocha("","Rocha da base: "));P.push(rocha("_t","Rocha do topo: "));
+    }else P.push(rocha("",""));
+    // estruturas
+    const meds=(rec.medidas||[]).filter(m=>m.tipo_estrutura&&m.dir_merg!==""&&m.dir_merg!=null).map(m=>{const lb=String(choiceLabel("tipo_estrutura",m.tipo_estrutura));const nm=lb.includes(" – ")?lb.split(" – ")[0]:low(lb.split(" /")[0]);return `${nm} ${String(m.dir_merg).padStart(3,"0")}/${String(m.mergulho??"").padStart(2,"0")}`;});
+    const fr=[];if(meds.length)fr.push(`Medidas estruturais (Clar): ${meds.join("; ")}.`);
+    if(G("espacamento")||G("familias")){let x=`Fraturamento com espaçamento ${L("espacamento")||"não informado"}`;if(G("familias"))x+=`, ${L("familias")}`;if(G("ortogonal")==="sim")x+=", ortogonais";
+      const fm=[1,2,3].map(i=>G(`fam${i}_medida`)).filter(Boolean);if(fm.length)x+=` (${fm.map(f=>low(f.replace("Fratura / junta","fratura"))).join("; ")})`;fr.push(x+".");}
+    if(fr.length)P.push(fr.join(" "));
+    const alt=G("alteracao")||[];
+    if(alt.length&&!alt.includes("ausente"))P.push(`Alteração hidrotermal ${L("intensidade")||""}${G("estilo")?`, ${L("estilo")}`:""}: ${L("alteracao")}.`.replace("hidrotermal :","hidrotermal:"));
+    else if(alt.includes("ausente"))P.push("Sem sinais de alteração hidrotermal.");
+    const it=[];if(G("unidade_sgb"))it.push(`unidade ${G("unidade_sgb")}`);if(G("confianca"))it.push(`confiança ${L("confianca")}`);
+    if(G("litotipo"))P.push(`Interpretado como ${lit("")}${tipo==="contato"&&G("litotipo_t")?` (base) e ${lit("_t")} (topo)`:""}${it.length?` – ${it.join(", ")}`:""}.`);
+  }
+  if(L("potencial"))P.push(`Potencial: ${L("potencial")}.`);
+  if(G("amostra"))P.push(G("amostra")==="coletada"?"Amostra coletada para análise química.":"Amostra não coletada.");
+  if(G("observacoes"))P.push(`Obs.: ${G("observacoes")}`);
+  CUR=prev;if(CUR)recompute();
+  return P.join(" ").replace(/\s+/g," ").replace(/ \./g,".").replace(/\.\./g,".").trim();
+}
+async function copiarTexto(t){
+  try{await navigator.clipboard.writeText(t);toast("Texto copiado");}
+  catch(e){const ta=document.getElementById("f_texto_descritivo");if(ta){ta.focus();ta.select();}toast("Selecionado – use Copiar do teclado");}
+}
+function renderTexto(leaf,w){
+  if(!CUR.texto_editado||!CUR.values.texto_descritivo){CUR.values.texto_descritivo=gerarTexto(CUR);CUR.texto_editado=false;saveCur();}
+  w.appendChild(el(`<div class="qlabel"><span class="txt">${esc(leaf.l)}</span></div>`));
+  const st=el(`<div class="hint"></div>`);
+  const ta=el(`<textarea id="f_texto_descritivo" style="min-height:260px"></textarea>`);ta.value=CUR.values.texto_descritivo||"";
+  const upd=()=>{st.textContent=CUR.texto_editado?"✎ Texto editado por você – não muda mais sozinho.":"Gerado automaticamente a partir da ficha. Pode editar à vontade.";};
+  ta.oninput=()=>{CUR.values.texto_descritivo=ta.value;CUR.texto_editado=true;upd();saveCur();};
+  const row=el(`<div class="row"><button type="button" class="btn primary">📋 Copiar texto</button><button type="button" class="btn">↻ Gerar de novo</button></div>`);
+  const [bc,bg]=row.querySelectorAll("button");
+  bc.onclick=()=>copiarTexto(ta.value);
+  bg.onclick=()=>{if(CUR.texto_editado&&!confirm("Gerar de novo apaga as suas edições no texto. Continuar?"))return;CUR.texto_editado=false;CUR.values.texto_descritivo=gerarTexto(CUR);ta.value=CUR.values.texto_descritivo;upd();saveCur();toast("Texto atualizado");};
+  upd();w.appendChild(st);w.appendChild(ta);w.appendChild(row);
+  return w;
+}
 function renderChildren(node,host,ctx,errs,k){
   for(const c of node.children){
     if(c.kind==="group"){renderChildren(c,host,ctx,errs,k);continue;}
@@ -333,6 +465,7 @@ function renderChildren(node,host,ctx,errs,k){
 function renderLeaf(leaf,ctx,errs,k){
   const t=baseType(leaf.t),list=listOf(leaf.t),store=ctx||CUR.values,val=store[leaf.n];
   const w=document.createElement("div");w.className="q";w.dataset.n=leaf.n;if(ctx)w.dataset.k=k;w._ctx=ctx;
+  if(leaf.n==="texto_descritivo")return renderTexto(leaf,w);
   if(t==="note"){
     const isImg=!!leaf.img;
     const n=el(`<div class="note${leaf.n==="pct_aviso"?" warn":(isImg?"":" info")}"></div>`);n.dataset.tpl=leaf.l;n.innerHTML=interp(leaf.l,ctx);
@@ -426,19 +559,44 @@ function renderRepeat(rep,errs){
   w.appendChild(add);return w;
 }
 function drawPad(){
-  const box=el(`<div style="display:flex;flex-direction:column;gap:6px"><canvas class="draw" id="f_croqui"></canvas><div class="row" style="align-items:center"><span class="muted">Desenhe com o dedo</span><button type="button" class="btn" style="flex:0 0 auto;padding:6px 12px">Limpar</button></div></div>`);
-  const c=box.querySelector("canvas"),clr=box.querySelector("button");
+  const CORES=[["#111111","preto"],["#C62828","vermelho"],["#1565C0","azul"],["#2E7D32","verde"],["#8D6E63","marrom"]];
+  const box=el(`<div style="display:flex;flex-direction:column;gap:6px">
+    <div class="ctools">${CORES.map(([c,n],i)=>`<button type="button" class="cbtn${i===0?" on":""}" data-c="${c}" aria-label="${n}" style="background:${c}"></button>`).join("")}
+      <button type="button" class="tbtn" data-t="borracha">⌫ Borracha</button><button type="button" class="tbtn" data-t="fino">Traço: fino</button></div>
+    <canvas class="draw" id="f_croqui"></canvas>
+    <div class="row"><button type="button" class="btn" data-a="undo">↶ Desfazer</button><button type="button" class="btn" data-a="clear">Limpar tudo</button></div></div>`);
+  const c=box.querySelector("canvas");
+  let cor="#111111",borracha=false,larg=2.4;const pilha=[];
   requestAnimationFrame(()=>{
     const r=c.getBoundingClientRect(),dpr=window.devicePixelRatio||1;c.width=r.width*dpr;c.height=r.height*dpr;
-    const g=c.getContext("2d");g.scale(dpr,dpr);g.fillStyle="#fff";g.fillRect(0,0,r.width,r.height);g.lineWidth=2.4;g.lineCap="round";g.lineJoin="round";g.strokeStyle="#111";
-    if(CUR.croqui){const im=new Image();im.onload=()=>g.drawImage(im,0,0,r.width,r.height);im.src=CUR.croqui;}
+    const g=c.getContext("2d");g.scale(dpr,dpr);g.lineCap="round";g.lineJoin="round";
+    const branco=()=>{g.fillStyle="#fff";g.fillRect(0,0,r.width,r.height);};
+    const pintar=url=>new Promise(res=>{branco();if(!url)return res();const im=new Image();im.onload=()=>{g.drawImage(im,0,0,r.width,r.height);res();};im.src=url;});
+    pintar(CUR.croqui);
+    const salvar=()=>{CUR.croqui=c.toDataURL("image/png");CUR.values.croqui="sim";saveCur();};
     let down=false;const p=e=>{const b=c.getBoundingClientRect();return[e.clientX-b.left,e.clientY-b.top];};
-    c.onpointerdown=e=>{down=true;c.setPointerCapture(e.pointerId);const[x,y]=p(e);g.beginPath();g.moveTo(x,y);};
+    c.onpointerdown=e=>{down=true;c.setPointerCapture(e.pointerId);pilha.push(c.toDataURL("image/png"));if(pilha.length>20)pilha.shift();
+      g.strokeStyle=borracha?"#ffffff":cor;g.lineWidth=borracha?18:larg;const[x,y]=p(e);g.beginPath();g.moveTo(x,y);g.lineTo(x+0.1,y+0.1);g.stroke();};
     c.onpointermove=e=>{if(!down)return;const[x,y]=p(e);g.lineTo(x,y);g.stroke();};
-    c.onpointerup=c.onpointercancel=()=>{if(!down)return;down=false;CUR.croqui=c.toDataURL("image/png");CUR.values.croqui="sim";saveCur();};
-    clr.onclick=()=>{g.fillStyle="#fff";g.fillRect(0,0,r.width,r.height);CUR.croqui=null;CUR.values.croqui="";saveCur();};
+    c.onpointerup=c.onpointercancel=()=>{if(!down)return;down=false;salvar();};
+    box.querySelectorAll(".cbtn").forEach(b=>b.onclick=()=>{cor=b.dataset.c;borracha=false;box.querySelectorAll(".cbtn,.tbtn[data-t=borracha]").forEach(x=>x.classList.remove("on"));b.classList.add("on");});
+    box.querySelector('[data-t="borracha"]').onclick=e=>{borracha=true;box.querySelectorAll(".cbtn").forEach(x=>x.classList.remove("on"));e.currentTarget.classList.add("on");};
+    box.querySelector('[data-t="fino"]').onclick=e=>{larg=larg<4?5:2.4;e.currentTarget.textContent="Traço: "+(larg<4?"fino":"grosso");};
+    box.querySelector('[data-a="undo"]').onclick=async()=>{if(!pilha.length){toast("Nada para desfazer");return;}await pintar(pilha.pop());salvar();};
+    box.querySelector('[data-a="clear"]').onclick=()=>{if(!confirm("Apagar todo o croqui?"))return;pilha.push(c.toDataURL("image/png"));branco();CUR.croqui=null;CUR.values.croqui="";saveCur();};
   });
   return box;
+}
+function avisoDuplicado(){
+  const w=document.querySelector('#body .q[data-n="ponto"]');if(!w)return;
+  let d=w.querySelector(".dupwarn");const usado=codigoUsado(CUR.values.ponto,CUR.id);
+  if(!usado){if(d)d.remove();return;}
+  const sug=codigoLivre(CUR.values.ponto,CUR.id);
+  if(!d){d=el(`<div class="banner warn dupwarn"></div>`);w.appendChild(d);}
+  d.innerHTML=`<span>⚠ Já existe a ficha <b>${esc(usado.values.ponto)}</b> neste projeto (${hora(usado.created)}). Sugestão: <b>${esc(sug)}</b></span>`;
+  const b=el(`<button type="button" class="btn">Usar ${esc(sug)}</button>`);
+  b.onclick=()=>{CUR.values.ponto=sug;const i=$("f_ponto");if(i)i.value=sug;saveCur();refresh();};
+  d.appendChild(b);
 }
 function refresh(){
   if(view!=="form")return;
@@ -455,6 +613,7 @@ function refresh(){
     if(note&&note.dataset.tpl&&!note.querySelector("img"))note.innerHTML=interp(note.dataset.tpl,w._ctx);
   });
   const h=document.querySelector(".top h1");if(h)h.textContent=CUR.values.ponto||"Nova ficha";
+  avisoDuplicado();
 }
 
 /* ================= exportação ================= */
@@ -466,6 +625,7 @@ function recordRows(rec){
   for(const c of EXCOLS){if(c==="ponto"||c==="geologo")continue;
     if(REL[c]===false){row[c]="";continue;}
     const leaf=BYNAME[c];
+    if(c==="texto_descritivo"){row[c]=rec.texto_editado&&rec.values.texto_descritivo?rec.values.texto_descritivo:gerarTexto(rec);recompute();continue;}
     row[c]=baseType(leaf.t)==="calculate"?CALC[c]:(c==="croqui"?(rec.croqui?safe(rec.values.ponto||rec.id)+".png":""):cell(leaf,rec.values[c]));
   }
   const med=REL.medidas===false?[]:rec.medidas.map((m,i)=>({projeto:row.projeto,ponto:row.ponto,geologo:row.geologo,n:i+1,
@@ -530,6 +690,7 @@ function renderExport(){
       const r=await shareOrDownload(blob,nome+".zip");
       if(r==="cancel"){toast("Envio cancelado – fichas continuam como não exportadas");return;}
       const t=nowIso();for(const x of recs){x.exported=true;x.exportedAt=t;await DB.put(x);}
+      SETTINGS.lastExport=t;DB.set("settings",SETTINGS);
       toast(r==="shared"?"Arquivo enviado":"Arquivo salvo em Downloads");view=PROJ?"home":"projects";render();
     }catch(e){console.error(e);toast("Erro na exportação: "+e.message,5000);}
   };
@@ -581,6 +742,9 @@ function renderMore(){
     const porGeo={};for(const r of recs){const g=projDe(r)+" – "+(nomeGeo(r.values)||"(sem geólogo)");porGeo[g]=(porGeo[g]||0)+1;}
     res.innerHTML="";
     res.appendChild(el(`<div class="banner info" style="flex-direction:column;align-items:flex-start"><b>${recs.length} fichas encontradas</b><span>${Object.entries(porGeo).map(([g,n])=>esc(g)+": "+n).join(" · ")}</span></div>`));
+    const grp={};for(const r of recs){const k=projDe(r)+"|"+codNorm(r.values.ponto);(grp[k]=grp[k]||[]).push(r);}
+    const reps=Object.values(grp).filter(a=>a.length>1&&codNorm(a[0].values.ponto));
+    if(reps.length)res.appendChild(el(`<div class="banner danger-b" style="flex-direction:column;align-items:flex-start;margin-top:8px"><b>⚠ ${reps.length} código${reps.length>1?"s":""} de ponto repetido${reps.length>1?"s":""}</b><span>${reps.map(a=>`${esc(projDe(a[0]))} · <b>${esc(a[0].values.ponto)}</b>: ${a.map(r=>esc(nomeGeo(r.values)||"?")).join(", ")}`).join("<br>")}</span><span class="muted">As fichas são mantidas; confira e renomeie no celular de quem descreveu.</span></div>`));
     const g=el(`<button class="btn primary big" style="margin-top:8px">Gerar planilha consolidada</button>`);res.appendChild(g);
     g.onclick=async()=>{const nome="Pts.Campo_Consolidado_"+dataArq();await shareOrDownload(await buildZip(recs,nome),nome+".zip");};
   };fin.click();};

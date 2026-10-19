@@ -47,6 +47,13 @@ button{font:inherit;color:inherit}
 .banner.warn{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn)}
 .banner.ok{background:var(--ok-bg);color:var(--ok);border:1px solid var(--ok)}
 .banner.info{background:var(--sel);border:1px solid var(--accent)}
+.banner.danger-b{background:var(--danger-bg);color:var(--danger);border:1px solid var(--danger)}
+.banner .btn{flex:none}
+.ctools{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.cbtn{width:34px;height:34px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 1px var(--line);cursor:pointer}
+.cbtn.on{box-shadow:0 0 0 3px var(--accent)}
+.tbtn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:7px 10px;font-size:14px;cursor:pointer}
+.tbtn.on{border-color:var(--accent);background:var(--sel);font-weight:700}
 .list{display:flex;flex-direction:column;gap:8px}
 .card{border:1px solid var(--line);border-radius:10px;padding:10px 12px;display:flex;justify-content:space-between;gap:10px;align-items:center;background:var(--surface);cursor:pointer;text-align:left;width:100%}
 .card{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
