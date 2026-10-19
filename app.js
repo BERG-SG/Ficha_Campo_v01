@@ -1,6 +1,6 @@
 /* Ficha de Ponto BERG – app offline. Formulário gerado do XLSForm (form.js). */
 "use strict";
-const APP_VERSION = "0.9.2";
+const APP_VERSION = "0.9.3";
 const F = window.FORM, CH = F.choices;
 const SEC_COLORS = {g_ident:"#201F1E",g_aflor:"#7A5A2E",g_macro:"#8F3032",g_miner:"#8F3032",g_testes:"#9A6B1E",g_estr:"#3F6B3F",g_alt:"#5C1F1F",g_interp:"#6E6659",g_obs:"#201F1E"};
 const META = new Set(["start","end","today"]);
@@ -361,6 +361,23 @@ function renderLeaf(leaf,ctx,errs,k){
   }else if(t==="select_one"&&leaf.app==="minimal"){
     const s=el(`<select class="inp" id="${id}"><option value="">— selecione —</option>${CH[list].map(o=>`<option value="${o[0]}"${String(val)===o[0]?" selected":""}>${esc(o[1])}</option>`).join("")}</select>`);
     s.onchange=()=>set(s.value);w.appendChild(s);
+  }else if(t==="select_multiple"&&leaf.app==="minimal"){   // lista recolhida de múltipla escolha
+    const opts=CH[list];
+    const resumo=()=>{const a=Array.isArray(store[leaf.n])?store[leaf.n]:[];return a.length?a.map(x=>choiceLabel(list,x).split(": ")[0]).join(", "):"— selecione —";};
+    const btn=el(`<button type="button" class="inp msel" id="${id}" aria-expanded="false"><span></span><b>▾</b></button>`);
+    btn.querySelector("span").textContent=resumo();
+    const box=el(`<div class="opts msel-list" hidden></div>`);
+    btn.onclick=()=>{box.hidden=!box.hidden;btn.setAttribute("aria-expanded",String(!box.hidden));btn.querySelector("b").textContent=box.hidden?"▾":"▴";};
+    opts.forEach((o,j)=>{
+      const on=SEL(val,o[0]);
+      const l=el(`<label class="opt${on?" on":""}"><input type="checkbox" id="${id}_${j}"${on?" checked":""}><span></span></label>`);
+      l.querySelector("span").textContent=o[1];
+      const inp=l.querySelector("input");
+      inp.onclick=()=>{let a=Array.isArray(store[leaf.n])?[...store[leaf.n]]:[];a=inp.checked?[...a,o[0]]:a.filter(x=>x!==o[0]);set(a);
+        l.classList.toggle("on",inp.checked);btn.querySelector("span").textContent=resumo();};
+      box.appendChild(l);
+    });
+    w.appendChild(btn);w.appendChild(box);
   }else if(t==="select_one"||t==="select_multiple"){
     const multi=t==="select_multiple",opts=CH[list];
     const box=el(`<div class="opts${opts.length>=6&&Math.max(...opts.map(o=>o[1].length))<=20?" two":""}"></div>`);
