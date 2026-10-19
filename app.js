@@ -1,6 +1,6 @@
 /* Ficha de Ponto BERG – app offline. Formulário gerado do XLSForm (form.js). */
 "use strict";
-const APP_VERSION = "0.8.3";
+const APP_VERSION = "0.9.2";
 const F = window.FORM, CH = F.choices;
 const SEC_COLORS = {g_ident:"#201F1E",g_aflor:"#7A5A2E",g_macro:"#8F3032",g_miner:"#8F3032",g_testes:"#9A6B1E",g_estr:"#3F6B3F",g_alt:"#5C1F1F",g_interp:"#6E6659",g_obs:"#201F1E"};
 const META = new Set(["start","end","today"]);
@@ -24,7 +24,8 @@ const REP_NAMES=new Set(REP_LEAVES.map(l=>l.n));
 const LEAVES=[];(function f(n){for(const c of n.children){if(c.kind==="leaf")LEAVES.push(c);else if(c.kind==="group")f(c);}})(TREE);
 const BYNAME=Object.fromEntries(F.rows.map(r=>[r.n,r]));
 const listOf=t=>t.split(" ")[1]||null, baseType=t=>t.split(" ")[0];
-const EXCOLS=LEAVES.filter(l=>{const t=baseType(l.t);return !META.has(t)&&t!=="note"&&listOf(l.t)!=="ver";}).map(l=>l.n);
+const AUX=/^(lbl_|solo_(fam|pre|adj|nota)[12]$|solo_pont$)/;
+const EXCOLS=LEAVES.filter(l=>{const t=baseType(l.t);return !META.has(t)&&t!=="note"&&listOf(l.t)!=="ver"&&!AUX.test(l.n);}).map(l=>l.n);
 
 /* ================= banco local (IndexedDB) ================= */
 const DB=(()=>{
@@ -42,17 +43,20 @@ const DB=(()=>{
 let CUR=null, REL={}, CALC={};
 const SEL=(v,o)=>Array.isArray(v)&&v.includes(o), CNT=v=>Array.isArray(v)?v.length:0;
 const fnCache={};
+const IF=(c,a,b)=>c?a:b, CONCAT=(...a)=>a.map(x=>x==null?"":x).join(""), COAL=(a,b)=>(a===""||a==null)?b:a;
 function ev(js,ctx,cur){
   if(!js)return true;
-  const f=fnCache[js]||(fnCache[js]=new Function("V","SEL","CNT","CUR","return ("+js+");"));
+  const f=fnCache[js]||(fnCache[js]=new Function("V","SEL","CNT","CUR","IF","CONCAT","COAL","CHN","return ("+js+");"));
   const V=n=>{
     if(ctx&&REP_NAMES.has(n)){const v=ctx[n];return v==null?"":v;}
     if(n in CALC)return CALC[n];
     if(REL[n]===false)return "";
     const v=CUR.values[n];return v==null?"":v;
   };
-  try{return f(V,SEL,CNT,cur);}catch(e){console.warn(js,e);return true;}
+  const CHN=n=>{const v=V(n);if(v==="")return "";const l=listOf(BYNAME[n].t);return choiceLabel(l,v);};
+  try{return f(V,SEL,CNT,cur,IF,CONCAT,COAL,CHN);}catch(e){console.warn(js,e);return true;}
 }
+const nomeGeo=v=>v.geologo==="outro"?(v.geologo_outro||"Outro"):(v.geologo?choiceLabel("geologos",v.geologo):"");
 const choiceLabel=(list,v)=>{const o=(CH[list]||[]).find(c=>c[0]===String(v));return o?o[1]:v;};
 function recompute(){
   REL={};CALC={};
@@ -62,12 +66,9 @@ function recompute(){
     if(c.kind==="group")walk(c,r);else if(baseType(c.t)==="calculate")CALC[c.n]=r?calc(c.n):"";
   }})(TREE,true);
 }
-function corNome(n){const v=CUR.values["cor_solo_"+n];if(!v||REL["cor_solo_"+n]===false)return "";return v==="outra"?(CUR.values["cor_solo_"+n+"_outra"]||""):choiceLabel("cores_solo",v);}
 function calc(name,ctx){
-  if(name==="cor_solo_desc"){const p=[1,2,3].map(corNome);return p[0]?p[0]+(p[1]?" + "+p[1]:"")+(p[2]?" + "+p[2]:""):"";}
-  if(name==="pct_total"){let s=0;for(const l of LEAVES)if(l.n.startsWith("pct_")&&REL[l.n]!==false){const v=Number(CUR.values[l.n]);if(CUR.values[l.n]!==""&&!isNaN(v))s+=v;}return s;}
-  if(name==="medida_txt"&&ctx){if(!ctx.tipo_estrutura)return "";return choiceLabel("tipo_estrutura",ctx.tipo_estrutura)+" "+(ctx.dir_merg??"")+"/"+(ctx.mergulho??"");}
-  return "";
+  const leaf=BYNAME[name];if(!leaf||!leaf.calc)return "";
+  const v=ev(leaf.calc,ctx);return v==null||v===true&&leaf.calc===""?"":v;
 }
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const interp=(s,ctx)=>s.replace(/\$\{(\w+)\}/g,(m,n)=>{const v=(n in CALC)?CALC[n]:(ctx&&REP_NAMES.has(n)?ctx[n]:CUR.values[n]);return v==null?"":esc(v);}).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>");
@@ -121,11 +122,11 @@ function sugerirCodigo(){
   const m=String(last.values.ponto).match(/^(.*?)(\d+)(\D*)$/);if(!m)return "";
   const n=String(Number(m[2])+1).padStart(m[2].length,"0");return m[1]+n+m[3];
 }
-async function novaFicha(duplicar){
-  const base=duplicar?byCreated()[0]:null;
+async function novaFicha(baseId){
+  const base=baseId?RECS.find(r=>r.id===baseId):null;
   const values={};
   if(base){for(const[k,v]of Object.entries(base.values))if(!NAO_DUPLICAR.has(k))values[k]=JSON.parse(JSON.stringify(v));}
-  if(SETTINGS.geologo)values.geologo=SETTINGS.geologo;
+  if(SETTINGS.geologo){values.geologo=SETTINGS.geologo;if(SETTINGS.geologo==="outro")values.geologo_outro=SETTINGS.geologo_outro||"";}
   values.ponto=sugerirCodigo();
   CUR={id:uid(),projeto:PROJ===SEM_PROJ?"":PROJ,created:nowIso(),updated:nowIso(),status:"rascunho",exported:false,values,medidas:[],croqui:null};
   RECS.push(CUR);await DB.put(CUR);
@@ -139,6 +140,7 @@ function goHome(){if(CUR){clearTimeout(saveTimer);CUR.updated=nowIso();DB.put(CU
 /* ================= telas ================= */
 function render(){
   if(view==="projects")return renderProjects();
+  if(view==="dup")return renderDup();
   if(view==="home")return renderHome();
   if(view==="form")return renderForm();
   if(view==="export")return renderExport();
@@ -152,7 +154,7 @@ function renderProjects(){
   app.innerHTML="";
   app.appendChild(el(`<div class="top"><div style="flex:1;min-width:0" class="sub">v${APP_VERSION} · ficha ${esc(F.version)}</div><button id="more">Mais</button></div>`));
   const m=el(`<div class="main"></div>`);app.appendChild(m);
-  m.appendChild(el(`<div class="hero"><img src="icons/logo-header.png" alt="BERG Serviços Geológicos"><div class="t">Fichas de Ponto</div><div class="s">${SETTINGS.geologo?"Geólogo: "+esc(choiceLabel("geologos",SETTINGS.geologo)):"BERG Serviços Geológicos"}</div></div>`));
+  m.appendChild(el(`<div class="hero"><img src="icons/logo-header.png" alt="BERG Serviços Geológicos"><div class="t">Fichas de Ponto</div><div class="s">${SETTINGS.geologo?"Geólogo: "+esc(nomeGeo(SETTINGS)):"BERG Serviços Geológicos"}</div></div>`));
   m.appendChild(el(`<h2>Novo projeto</h2>`));
   const f=el(`<form class="row" style="flex-wrap:nowrap"><input type="text" id="pnome" placeholder="Nome do projeto (ex.: Paramirim)" autocomplete="off" style="flex:1"><button class="btn primary" style="flex:0 0 auto">Criar</button></form>`);
   m.appendChild(f);
@@ -199,6 +201,30 @@ function longPress(node,onLong,onTap){
   node.addEventListener("contextmenu",e=>e.preventDefault());
   node.addEventListener("click",e=>{if(fired){e.preventDefault();fired=false;return;}onTap();});
 }
+function hora(iso){const d=new Date(iso),p=n=>String(n).padStart(2,"0");return `${p(d.getDate())}/${p(d.getMonth()+1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;}
+function resumoPonto(r){
+  const v=r.values,parts=[];
+  if(v.tipo_ponto)parts.push(choiceLabel("tipo_ponto",v.tipo_ponto));
+  if(Array.isArray(v.exposicao)&&v.exposicao.length)parts.push(v.exposicao.map(x=>choiceLabel("exposicao",x)).join(", "));
+  const sig=[v.litotipo,v.tipo_ponto==="contato"?v.litotipo_t:""].filter(Boolean).join(" / ");
+  return {exp:parts.join(" · "),sig};
+}
+function renderDup(){
+  const RS=[...recsProj()].sort((a,b)=>b.created.localeCompare(a.created));
+  app.innerHTML="";
+  app.appendChild(el(`<div class="top"><button id="dupback">‹ Voltar</button><h1>Duplicar Ponto</h1></div>`));
+  const m=el(`<div class="main"></div>`);app.appendChild(m);
+  m.appendChild(el(`<div class="muted">Escolha o ponto a copiar. A ficha nova recebe todos os campos dele, exceto código do ponto, medidas estruturais, amostra, observações e croqui.</div>`));
+  const list=el(`<div class="list"></div>`);m.appendChild(list);
+  if(!RS.length)list.appendChild(el(`<div class="muted">Este projeto ainda não tem fichas para duplicar.</div>`));
+  for(const r of RS){
+    const {exp,sig}=resumoPonto(r);
+    const c=el(`<button class="card"><div style="min-width:0"><b>${esc(r.values.ponto||"(sem código)")}</b>${sig?` <span class="chip final">${esc(sig)}</span>`:""}<div class="meta">${esc(exp||"—")}</div><div class="meta">🕒 ${hora(r.created)}</div></div><span class="chip draft">copiar</span></button>`);
+    c.onclick=()=>novaFicha(r.id);list.appendChild(c);
+  }
+  $("dupback").onclick=()=>{view="home";render();window.scrollTo(0,0);};
+}
+
 function renderHome(){
   const pend=pendentes().length;
   app.innerHTML="";
@@ -214,7 +240,7 @@ function renderHome(){
   if(!SELMODE){
     const pm=el(`<div class="row" id="pmrow" hidden><button class="btn" id="pren">Renomear projeto</button><button class="btn danger" id="pdel">Excluir projeto</button></div>`);m.appendChild(pm);
     m.appendChild(el(`<button class="btn primary big" id="nova">+ Nova ficha</button>`));
-    const dup=el(`<button class="btn" id="dup">⧉ Duplicar ponto anterior${RS.length?" ("+esc(byCreated()[0].values.ponto||"sem código")+")":""}</button>`);
+    const dup=el(`<button class="btn" id="dup">⧉ Duplicar Ponto</button>`);
     dup.disabled=!RS.length;m.appendChild(dup);
     if(pend)m.appendChild(el(`<div class="banner warn"><span><b>${pend}</b> ficha${pend>1?"s":""} não exportada${pend>1?"s":""}</span><button class="btn" id="exp1">Exportar</button></div>`));
     else if(RS.length)m.appendChild(el(`<div class="banner ok">Todas as fichas deste projeto foram exportadas.</div>`));
@@ -253,7 +279,7 @@ function renderHome(){
     };
     return;
   }
-  $("nova").onclick=()=>novaFicha(false);$("dup").onclick=()=>novaFicha(true);
+  $("nova").onclick=()=>novaFicha(false);$("dup").onclick=()=>{view="dup";render();window.scrollTo(0,0);};
   $("back").onclick=()=>{view="projects";render();window.scrollTo(0,0);};
   $("pmenu").onclick=()=>{$("pmrow").hidden=!$("pmrow").hidden;};
   $("pren").onclick=renomearProjeto;$("pdel").onclick=excluirProjeto;
@@ -268,9 +294,9 @@ function renderForm(){
   const vis=visibleScreens();if(!vis.includes(screenIdx))screenIdx=vis[0];
   const sc=SCREENS[screenIdx],pos=vis.indexOf(screenIdx),last=pos===vis.length-1;
   app.innerHTML="";
-  const top=el(`<div class="top"><button id="home">‹ Fichas</button><h1>${esc(CUR.values.ponto||"Nova ficha")}</h1><select id="jump" aria-label="Ir para seção"><option value="">☰ Seções</option>${vis.map(i=>`<option value="${i}">${esc(SCREENS[i].l)}</option>`).join("")}</select></div>`);
+  const top=el(`<div class="top"><button id="home">‹ Fichas</button><h1>${esc(CUR.values.ponto||"Nova ficha")}</h1><select id="jump" aria-label="Ir para seção"><option value="">☰ Seções</option>${vis.map(i=>`<option value="${i}">${interp(SCREENS[i].l).replace(/<[^>]+>/g,"")}</option>`).join("")}</select></div>`);
   app.appendChild(top);
-  app.appendChild(el(`<div class="band" style="background:${SEC_COLORS[sc.n]||"#8F3032"}"><span>${esc(sc.l)}</span><small>${pos+1}/${vis.length}</small></div>`));
+  app.appendChild(el(`<div class="band" style="background:${SEC_COLORS[sc.n.replace(/_t$/,"")]||"#8F3032"}"><span>${interp(sc.l)}</span><small>${pos+1}/${vis.length}</small></div>`));
   app.appendChild(el(`<div class="progress"><i style="width:${(pos+1)/vis.length*100}%"></i></div>`));
   const m=el(`<div class="main" id="body"></div>`);app.appendChild(m);
   if(dupFrom&&screenIdx===vis[0])m.appendChild(el(`<div class="banner info">Campos copiados de <b>${esc(dupFrom)}</b>. Revise tudo antes de finalizar.</div>`));
@@ -317,7 +343,7 @@ function renderLeaf(leaf,ctx,errs,k){
     const on=SEL(val,"ver");const b=el(`<button type="button" class="ref" aria-pressed="${on}">${esc(leaf.l)} ${on?"▲":"▼"}</button>`);
     b.onclick=()=>{store[leaf.n]=on?[]:["ver"];saveCur();render();};w.appendChild(b);return w;
   }
-  const lab=el(`<div class="qlabel"><span class="txt">${esc(leaf.l)}<span class="req" hidden> *</span></span></div>`);w.appendChild(lab);
+  const lab=el(`<div class="qlabel"><span class="txt">${interp(leaf.l,ctx)}<span class="req" hidden> *</span></span></div>`);w.appendChild(lab);
   w._star=lab.querySelector(".req");
   if(leaf.g){
     const gb=el(`<button type="button" class="gbtn" aria-expanded="false" aria-label="Ajuda">!</button>`);lab.appendChild(gb);
@@ -326,7 +352,7 @@ function renderLeaf(leaf,ctx,errs,k){
   }
   if(leaf.h){const h=el(`<div class="hint"></div>`);h.textContent=leaf.h;w.appendChild(h);}
   const id="f_"+leaf.n+(ctx?"_"+k:"");
-  const set=v=>{store[leaf.n]=v;if(leaf.n==="geologo"&&v){SETTINGS.geologo=v;DB.set("settings",SETTINGS);}onChange();};
+  const set=v=>{store[leaf.n]=v;const ex=w.querySelector(".err");if(ex)ex.remove();if((leaf.n==="geologo"&&v)||leaf.n==="geologo_outro"){SETTINGS.geologo=store.geologo;SETTINGS.geologo_outro=store.geologo_outro||"";DB.set("settings",SETTINGS);}onChange();};
   if(list&&list.startsWith("${")){   // seleção a partir das medidas registradas (repeat)
     const s=el(`<select class="inp" id="${id}" data-dyn="1"></select>`);s._leaf=leaf;fillDyn(s,leaf,val);
     s.onchange=()=>set(s.value);w.appendChild(s);
@@ -419,7 +445,7 @@ const curto=t=>String(t).split(": ")[0];
 function cell(leaf,v){if(isEmpty(v))return "";const list=listOf(leaf.t);if(list)return Array.isArray(v)?v.map(x=>curto(choiceLabel(list,x))).join("; "):curto(choiceLabel(list,v));return v;}
 function recordRows(rec){
   const prev=CUR;CUR=rec;recompute();
-  const row={projeto:rec.projeto||"",ponto:rec.values.ponto||"",geologo:cell(BYNAME.geologo,rec.values.geologo),status:rec.status,criado:fmtIso(rec.created),atualizado:fmtIso(rec.updated)};
+  const row={projeto:rec.projeto||"",ponto:rec.values.ponto||"",geologo:nomeGeo(rec.values),status:rec.status,criado:fmtIso(rec.created),atualizado:fmtIso(rec.updated)};
   for(const c of EXCOLS){if(c==="ponto"||c==="geologo")continue;
     if(REL[c]===false){row[c]="";continue;}
     const leaf=BYNAME[c];
@@ -444,7 +470,7 @@ function buildWorkbook(recs){
   const mh=["projeto","ponto","geologo","n","tipo_estrutura","dir_merg","mergulho","medida_clar","obs_estrutura"];
   const ws2=XLSX.utils.json_to_sheet(meds,{header:mh});ws2["!cols"]=mh.map(()=>({wch:16}));
   XLSX.utils.book_append_sheet(wb,ws2,"medidas");
-  const dic=head.map(h=>({campo:h,pergunta:BYNAME[h]?(BYNAME[h].l||"(calculado)"):{projeto:"nome do projeto",status:"rascunho / final",criado:"data de criação",atualizado:"última alteração"}[h]||""}));
+  const dic=head.map(h=>({campo:h,pergunta:BYNAME[h]?((BYNAME[h].l||"(calculado)").replace(/\$\{lbl_base\}/g," – base (se contato)")):{projeto:"nome do projeto",status:"rascunho / final",criado:"data de criação",atualizado:"última alteração"}[h]||""}));
   const ws3=XLSX.utils.json_to_sheet(dic,{header:["campo","pergunta"]});ws3["!cols"]=[{wch:22},{wch:60}];
   XLSX.utils.book_append_sheet(wb,ws3,"dicionario");
   return XLSX.write(wb,{bookType:"xlsx",type:"array"});
@@ -456,6 +482,7 @@ async function buildZip(recs,nome){
   for(const r of recs)if(r.croqui)zip.file("croquis/"+safe(r.values.ponto||r.id)+".png",r.croqui.split(",")[1],{base64:true});
   return zip.generateAsync({type:"blob",compression:"DEFLATE"});
 }
+function dataArq(){const d=new Date(),p=n=>String(n).padStart(2,"0");return `${p(d.getDate())}-${p(d.getMonth()+1)}-${d.getFullYear()}`;}
 function stamp(){const d=new Date(),p=n=>String(n).padStart(2,"0");return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;}
 async function shareOrDownload(blob,filename){
   const file=new File([blob],filename,{type:"application/zip"});
@@ -479,8 +506,9 @@ function renderExport(){
   const go=async recs=>{
     try{
       toast("Gerando arquivo…");
-      const geo=safe(choiceLabel("geologos",SETTINGS.geologo||"")||"equipe");
-      const nome=`BERG_fichas_${safe(PROJ||"todos")}_${geo}_${stamp()}`;
+      const gs=[...new Set(recs.map(r=>nomeGeo(r.values)).filter(Boolean))];
+      const geo=safe(gs.length===1?gs[0]:(gs.length>1?"Equipe":nomeGeo(SETTINGS)||"Equipe")).replace(/^_+|_+$/g,"");
+      const nome=`Pts.Campo_${safe(PROJ||"Todos").replace(/^_+|_+$/g,"")}_${geo}_${dataArq()}`;
       const blob=await buildZip(recs,nome);
       const r=await shareOrDownload(blob,nome+".zip");
       if(r==="cancel"){toast("Envio cancelado – fichas continuam como não exportadas");return;}
@@ -533,11 +561,11 @@ function renderMore(){
   bc.onclick=()=>{fin.onchange=async()=>{
     const recs=await readFiles([...fin.files]);fin.value="";
     if(!recs.length){res.innerHTML="";res.appendChild(el(`<div class="banner warn">Nenhuma ficha encontrada nos arquivos.</div>`));return;}
-    const porGeo={};for(const r of recs){const g=projDe(r)+" – "+(choiceLabel("geologos",r.values.geologo||"")||"(sem geólogo)");porGeo[g]=(porGeo[g]||0)+1;}
+    const porGeo={};for(const r of recs){const g=projDe(r)+" – "+(nomeGeo(r.values)||"(sem geólogo)");porGeo[g]=(porGeo[g]||0)+1;}
     res.innerHTML="";
     res.appendChild(el(`<div class="banner info" style="flex-direction:column;align-items:flex-start"><b>${recs.length} fichas encontradas</b><span>${Object.entries(porGeo).map(([g,n])=>esc(g)+": "+n).join(" · ")}</span></div>`));
     const g=el(`<button class="btn primary big" style="margin-top:8px">Gerar planilha consolidada</button>`);res.appendChild(g);
-    g.onclick=async()=>{const nome="BERG_fichas_CONSOLIDADO_"+stamp();await shareOrDownload(await buildZip(recs,nome),nome+".zip");};
+    g.onclick=async()=>{const nome="Pts.Campo_Consolidado_"+dataArq();await shareOrDownload(await buildZip(recs,nome),nome+".zip");};
   };fin.click();};
   br.onclick=()=>{fin.onchange=async()=>{
     const recs=await readFiles([...fin.files]);fin.value="";
